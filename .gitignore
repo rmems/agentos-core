@@ -1,3 +1,55 @@
-/target
-/.idea
-/.vscode
+# Rust build artifacts
+/target/
+/Cargo.lock
+
+# AgentOS system configs (never commit)
+/etc/agentos/
+/etc/agentos/apis/
+/etc/agentos/configs/
+/etc/agentos/tools/
+/etc/agentos/schemas/
+
+# Local configs (never commit)
+*.jsonc
+*.toml
+*.yaml
+*.yml
+
+# API keys
+opencode.jsonc
+google.jsonc
+github_copilot.jsonc
+ollama.jsonc
+azure.jsonc
+
+# RAG + Vector DB configs
+rag.json
+vector_db.json
+model_router.json
+
+# Qdrant data
+qdrant_storage/
+qdrant/
+*.db
+*.sqlite
+
+# Logs
+*.log
+logs/
+debug.log
+
+# Local models
+*.gguf
+models/
+local_models/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Cursor / Codex / Windsurf metadata
+.cursor/
+.codex/
+.windsurf/
