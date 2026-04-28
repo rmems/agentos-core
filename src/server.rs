@@ -13,8 +13,13 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::process::Command;
+use tokio::time::{Duration, timeout};
 
 use crate::config::ServerConfig;
+use crate::rag::{
+    Chunk, IndexReposReport, index_default_repos, load_rag_config, load_vector_db_config, search,
+};
 use crate::repo::{
     InvariantReport, ModuleGraph, PublicSymbol, RepoSummary, SearchHit, SearchRequest,
     TermResolution, TerminologyReport, build_module_graph, build_summary, list_public_api,
@@ -22,6 +27,7 @@ use crate::repo::{
     search_snapshot, terminology_markdown, validate_terminology,
 };
 use crate::session::{SessionSeed, SessionStore, SessionUpdate, SessionView};
+use crate::tools::ollama::ollama_generate;
 
 #[derive(Debug, Clone)]
 pub struct DiscoveryServer {
@@ -148,6 +154,69 @@ pub struct RunInvariantsRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SessionListResponse {
     pub sessions: Vec<SessionView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CallOllamaRequest {
+    pub model: String,
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CallOllamaResponse {
+    pub model: String,
+    pub response: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SearchReposRequest {
+    pub query: String,
+    pub max_context_chunks: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SearchReposResponse {
+    pub chunks: Vec<Chunk>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetFileRequest {
+    pub repo_root: Option<String>,
+    pub relative_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GetFileResponse {
+    pub repo_root: String,
+    pub relative_path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SummarizeChunksRequest {
+    pub query: String,
+    pub max_context_chunks: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SummarizeChunksResponse {
+    pub query: String,
+    pub summary: String,
+    pub chunks: Vec<Chunk>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CallOpencodeRequest {
+    pub prompt: String,
+    pub model: Option<String>,
+    pub timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct CallOpencodeResponse {
+    pub status: i32,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 #[tool_router]
@@ -355,6 +424,140 @@ impl DiscoveryServer {
             .await
             .map(Json)
             .map_err(internal_error)
+    }
+
+    #[tool(description = "Call a local Ollama model for bounded text generation.")]
+    async fn call_ollama(
+        &self,
+        Parameters(request): Parameters<CallOllamaRequest>,
+    ) -> Result<Json<CallOllamaResponse>, ErrorData> {
+        let response =
+            ollama_generate(&request.model, &request.prompt, "http://127.0.0.1:11434")
+                .await
+                .map_err(internal_error)?;
+        Ok(Json(CallOllamaResponse {
+            model: request.model,
+            response,
+        }))
+    }
+
+    #[tool(description = "Index configured local repos into the local Qdrant vector database.")]
+    async fn index_repos(&self) -> Result<Json<IndexReposReport>, ErrorData> {
+        let rag = load_rag_config().map_err(internal_error)?;
+        let db = load_vector_db_config().map_err(internal_error)?;
+        index_default_repos(&rag, &db)
+            .await
+            .map(Json)
+            .map_err(internal_error)
+    }
+
+    #[tool(description = "Search locally indexed repo chunks through Ollama embeddings and Qdrant.")]
+    async fn search_repos(
+        &self,
+        Parameters(request): Parameters<SearchReposRequest>,
+    ) -> Result<Json<SearchReposResponse>, ErrorData> {
+        let mut rag = load_rag_config().map_err(internal_error)?;
+        if let Some(limit) = request.max_context_chunks {
+            rag.max_context_chunks = limit.clamp(1, 32);
+        }
+        let db = load_vector_db_config().map_err(internal_error)?;
+        search(&request.query, &rag, &db)
+            .await
+            .map(|chunks| Json(SearchReposResponse { chunks }))
+            .map_err(internal_error)
+    }
+
+    #[tool(description = "Read a file from the default canon root or an explicitly provided repo root.")]
+    async fn get_file(
+        &self,
+        Parameters(request): Parameters<GetFileRequest>,
+    ) -> Result<Json<GetFileResponse>, ErrorData> {
+        let repo_root = request
+            .repo_root
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.default_root());
+        let relative = PathBuf::from(&request.relative_path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(ErrorData::invalid_params(
+                "relative_path must be a relative path without parent directory components",
+                None,
+            ));
+        }
+        let path = repo_root.join(&relative);
+        let content = tokio::fs::read_to_string(&path).await.map_err(internal_error)?;
+        Ok(Json(GetFileResponse {
+            repo_root: repo_root.display().to_string(),
+            relative_path: request.relative_path,
+            content,
+        }))
+    }
+
+    #[tool(description = "Search repo chunks and produce a compact extractive summary.")]
+    async fn summarize_chunks(
+        &self,
+        Parameters(request): Parameters<SummarizeChunksRequest>,
+    ) -> Result<Json<SummarizeChunksResponse>, ErrorData> {
+        let mut rag = load_rag_config().map_err(internal_error)?;
+        if let Some(limit) = request.max_context_chunks {
+            rag.max_context_chunks = limit.clamp(1, 32);
+        }
+        let db = load_vector_db_config().map_err(internal_error)?;
+        let chunks = search(&request.query, &rag, &db)
+            .await
+            .map_err(internal_error)?;
+        let summary = chunks
+            .iter()
+            .map(|chunk| {
+                let excerpt = chunk.text.lines().take(4).collect::<Vec<_>>().join(" ");
+                format!(
+                    "- {}:{} [{}]: {}",
+                    chunk.repo,
+                    chunk.path,
+                    chunk
+                        .score
+                        .map(|score| format!("{score:.3}"))
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    excerpt.trim()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(Json(SummarizeChunksResponse {
+            query: request.query,
+            summary,
+            chunks,
+        }))
+    }
+
+    #[tool(description = "Call OpenCode with a bounded prompt and optional model override.")]
+    async fn call_opencode(
+        &self,
+        Parameters(request): Parameters<CallOpencodeRequest>,
+    ) -> Result<Json<CallOpencodeResponse>, ErrorData> {
+        let mut command = Command::new("opencode");
+        command.arg("run");
+        if let Some(model) = &request.model {
+            command.arg("--model").arg(model);
+        }
+        command.arg(&request.prompt);
+
+        let result = timeout(
+            Duration::from_secs(request.timeout_seconds.unwrap_or(60).clamp(1, 300)),
+            command.output(),
+        )
+        .await
+        .map_err(|_| ErrorData::internal_error("opencode call timed out", None))?
+        .map_err(internal_error)?;
+
+        Ok(Json(CallOpencodeResponse {
+            status: result.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&result.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&result.stderr).to_string(),
+        }))
     }
 }
 

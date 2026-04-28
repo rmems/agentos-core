@@ -1,8 +1,10 @@
 mod config;
 mod install;
+mod rag;
 mod repo;
 mod server;
 mod session;
+mod tools;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
