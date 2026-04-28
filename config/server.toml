@@ -1,6 +1,6 @@
-server_name = "saaq-discovery"
-default_repo_root = "/home/raulmc/corinth-canal"
-default_pinned_terms = ["SAAQ", "OLMoE", "GGUF", "TelemetrySnapshot", "HybridModel"]
+server_name = "agentos-core"
+default_repo_root = "."
+default_pinned_terms = ["AgentOS", "RAG", "MCP", "Qdrant", "Ollama"]
 default_invariants = [
   "Treat the current repo as authoritative for implementation details.",
   "Use shared canon only for terminology resolution.",

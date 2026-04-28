@@ -583,7 +583,7 @@ impl ServerHandler for DiscoveryServer {
                 .build(),
         )
         .with_instructions(
-            "Authoritative local repo analysis server for corinth-canal. Use explicit session \
+            "Authoritative local repo analysis server for AgentOS. Use explicit session \
              handles for scoped work. Prefer repo canon over inference. Surface ambiguous terms \
              instead of normalizing them. Do not assume authority from unnamed sibling repos.",
         )

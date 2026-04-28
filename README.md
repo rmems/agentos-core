@@ -1,7 +1,7 @@
 # AgentOS Core
 
-`agentos-core` is a local Rust MCP server that exposes authoritative
-`corinth-canal` context and bounded repo analysis to local AI clients.
+`agentos-core` is a local Rust MCP server that exposes AgentOS context, local
+RAG, and bounded repo analysis to local AI clients.
 
 The repository and client-facing MCP server name are `agentos-core`. The
 Rust crate, release binary, and launcher all use the `agentos-core` name.
