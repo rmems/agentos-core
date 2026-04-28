@@ -21,7 +21,7 @@ It does **not** provide arbitrary shell execution, unrestricted writes, or cross
 
 ## Canon Policy
 
-The default canon root is `/home/raulmc/corinth-canal`.
+The default canon root is configured locally by the deployment environment.
 
 The server bakes in the following repo policy:
 
@@ -41,7 +41,7 @@ cargo build --release
 Run the MCP server over stdio:
 
 ```bash
-/home/raulmc/MCP/agentos-core/scripts/launch.sh
+./scripts/launch.sh
 ```
 
 Or run management helpers:
@@ -55,7 +55,7 @@ cargo run -- install --clients codex,cursor,vscode,windsurf,trae,antigravity,jet
 Local MCP clients should register the server as `agentos-core` and point to:
 
 ```text
-/home/raulmc/MCP/agentos-core/scripts/launch.sh
+<repo-root>/scripts/launch.sh
 ```
 
 ## Exposed MCP Features
@@ -105,10 +105,33 @@ JetBrains is handled in two ways:
 
 ## AgentOS Integration
 
-The local AgentOS tool definition lives at:
+OpenCode and Cursor should use `agentos-core` as the MCP server key. AgentOS
+keeps the matching local tool definition outside this repository.
 
-```text
-/etc/agentos/tools/agentos_core.json
+## OpenCode Provider Plan
+
+OpenCode is the local model front end for AgentOS. It is intended to route
+across:
+
+- ChatGPT Pro / OpenAI for primary cloud reasoning and general coding
+- Alibaba DashScope for Qwen cloud fallback and high-throughput coding
+- Google AI Studio for Gemini long-context and alternate reasoning
+- Ollama for local models and embeddings
+
+AgentOS keeps provider credentials, model routing, RAG settings, vector database
+settings, and MCP server definitions in local configuration files outside this
+repository.
+
+The intended routing shape is:
+
+```json
+{
+  "local": ["ollama"],
+  "cloud": ["opencode", "alibaba", "google", "github_copilot"],
+  "fallback": "opencode",
+  "fallback_order": ["opencode", "alibaba", "google", "ollama"]
+}
 ```
 
-OpenCode and Cursor should use `agentos-core` as the MCP server key.
+Local RAG uses Ollama embeddings with Qdrant. The active embedding model is
+`nomic-embed-text`, and the vector collection is `repos`.
