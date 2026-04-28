@@ -1,0 +1,9 @@
+server_name = "saaq-discovery"
+default_repo_root = "/home/raulmc/corinth-canal"
+default_pinned_terms = ["SAAQ", "OLMoE", "GGUF", "TelemetrySnapshot", "HybridModel"]
+default_invariants = [
+  "Treat the current repo as authoritative for implementation details.",
+  "Use shared canon only for terminology resolution.",
+  "Do not import assumptions from sibling repos unless the context explicitly names them.",
+  "If a term is ambiguous across repos, stop and surface the ambiguity rather than normalizing it.",
+]
