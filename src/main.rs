@@ -2,6 +2,7 @@ mod config;
 mod install;
 mod rag;
 mod repo;
+mod schema;
 mod server;
 mod session;
 mod tools;
@@ -17,9 +18,9 @@ use crate::server::DiscoveryServer;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "saaq-discovery",
+    name = "agentos-core",
     version,
-    about = "Local MCP server for bounded canon discovery"
+    about = "Local MCP server for AgentOS context and bounded repo analysis"
 )]
 struct Cli {
     #[command(subcommand)]

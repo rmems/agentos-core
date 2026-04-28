@@ -77,8 +77,10 @@ pub struct CreateSessionRequest {
     pub repo_root: Option<String>,
     pub active_stage: Option<String>,
     #[serde(default)]
+    #[schemars(schema_with = "crate::schema::string_vec_schema")]
     pub pinned_terms: Vec<String>,
     #[serde(default)]
+    #[schemars(schema_with = "crate::schema::string_vec_schema")]
     pub invariants: Vec<String>,
     pub notes: Option<String>,
 }
@@ -93,7 +95,9 @@ pub struct UpdateSessionRequest {
     pub session_id: String,
     pub label: Option<String>,
     pub active_stage: Option<String>,
+    #[schemars(schema_with = "crate::schema::optional_string_vec_schema")]
     pub pinned_terms: Option<Vec<String>>,
+    #[schemars(schema_with = "crate::schema::optional_string_vec_schema")]
     pub invariants: Option<Vec<String>>,
     pub notes: Option<String>,
 }
@@ -107,6 +111,7 @@ pub struct RepoScopedRequest {
 pub struct SearchCanonRequest {
     pub session_id: Option<String>,
     pub query: String,
+    #[schemars(schema_with = "crate::schema::optional_usize_schema")]
     pub max_results: Option<usize>,
     pub path_substring: Option<String>,
     pub case_sensitive: Option<bool>,
@@ -123,6 +128,7 @@ pub struct SearchCanonResponse {
 pub struct ResolveTermRequest {
     pub session_id: Option<String>,
     pub term: String,
+    #[schemars(schema_with = "crate::schema::optional_usize_schema")]
     pub max_hits: Option<usize>,
 }
 
@@ -130,6 +136,7 @@ pub struct ResolveTermRequest {
 pub struct PublicApiRequest {
     pub session_id: Option<String>,
     pub module_prefix: Option<String>,
+    #[schemars(schema_with = "crate::schema::optional_usize_schema")]
     pub max_items: Option<usize>,
 }
 
@@ -142,12 +149,14 @@ pub struct PublicApiResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TerminologyRequest {
     pub session_id: Option<String>,
+    #[schemars(schema_with = "crate::schema::optional_string_vec_schema")]
     pub terms: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RunInvariantsRequest {
     pub session_id: Option<String>,
+    #[schemars(schema_with = "crate::schema::optional_u64_schema")]
     pub timeout_seconds: Option<u64>,
 }
 
@@ -171,6 +180,7 @@ pub struct CallOllamaResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchReposRequest {
     pub query: String,
+    #[schemars(schema_with = "crate::schema::optional_usize_schema")]
     pub max_context_chunks: Option<usize>,
 }
 
@@ -195,6 +205,7 @@ pub struct GetFileResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SummarizeChunksRequest {
     pub query: String,
+    #[schemars(schema_with = "crate::schema::optional_usize_schema")]
     pub max_context_chunks: Option<usize>,
 }
 
@@ -209,6 +220,7 @@ pub struct SummarizeChunksResponse {
 pub struct CallOpencodeRequest {
     pub prompt: String,
     pub model: Option<String>,
+    #[schemars(schema_with = "crate::schema::optional_u64_schema")]
     pub timeout_seconds: Option<u64>,
 }
 

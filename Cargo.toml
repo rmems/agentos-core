@@ -1,8 +1,8 @@
 [package]
-name = "saaq-discovery"
+name = "agentos-core"
 version = "0.1.0"
 edition = "2024"
-description = "Local MCP server for authoritative corinth-canal context and bounded repo analysis"
+description = "Local MCP server for AgentOS context, RAG, and bounded repo analysis"
 license = "MIT"
 
 [dependencies]

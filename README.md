@@ -4,8 +4,7 @@
 `corinth-canal` context and bounded repo analysis to local AI clients.
 
 The repository and client-facing MCP server name are `agentos-core`. The
-current Rust crate and release binary are still named `saaq-discovery`, and the
-launcher script handles that internal binary path.
+Rust crate, release binary, and launcher all use the `agentos-core` name.
 
 ## Scope
 

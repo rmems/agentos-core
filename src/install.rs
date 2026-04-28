@@ -7,7 +7,7 @@ use clap::ValueEnum;
 use dirs::home_dir;
 use serde_json::{Map, Value, json};
 
-const SERVER_KEY: &str = "saaq-discovery";
+const SERVER_KEY: &str = "agentos-core";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum ClientTarget {
@@ -109,7 +109,7 @@ pub fn install(
             }
             ClientTarget::Jetbrains => {
                 let junie_path = home_path(".junie/mcp/mcp.json")?;
-                let snippet_path = home_path(".jetbrains/saaq-discovery.mcp.json")?;
+                let snippet_path = home_path(".jetbrains/agentos-core.mcp.json")?;
                 let entry = stdio_entry_json(&ctx.launcher_path());
                 upsert_json_server(
                     &junie_path,
@@ -182,7 +182,7 @@ pub fn uninstall(
             }
             ClientTarget::Jetbrains => {
                 let junie_path = home_path(".junie/mcp/mcp.json")?;
-                let snippet_path = home_path(".jetbrains/saaq-discovery.mcp.json")?;
+                let snippet_path = home_path(".jetbrains/agentos-core.mcp.json")?;
                 remove_json_server(&junie_path, "mcpServers", SERVER_KEY, dry_run)?;
                 if !dry_run && snippet_path.exists() {
                     std::fs::remove_file(&snippet_path)
@@ -236,7 +236,7 @@ pub fn doctor(ctx: &InstallContext) -> Result<String> {
         ("jetbrains-junie", home_path(".junie/mcp/mcp.json")?),
         (
             "jetbrains-snippet",
-            home_path(".jetbrains/saaq-discovery.mcp.json")?,
+            home_path(".jetbrains/agentos-core.mcp.json")?,
         ),
     ];
 

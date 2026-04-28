@@ -49,6 +49,7 @@ pub struct PublicSymbol {
     pub kind: String,
     pub module: String,
     pub relative_path: String,
+    #[schemars(schema_with = "crate::schema::usize_schema")]
     pub line: usize,
     pub declaration: String,
     pub docs: Option<String>,
@@ -64,6 +65,7 @@ pub struct GraphEdge {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHit {
     pub relative_path: String,
+    #[schemars(schema_with = "crate::schema::usize_schema")]
     pub line: usize,
     pub excerpt: String,
 }
@@ -125,12 +127,14 @@ pub struct InvariantReport {
     pub snapshot_id: String,
     pub checks: Vec<InvariantCheck>,
     pub terminology: TerminologyReport,
+    #[schemars(schema_with = "crate::schema::usize_schema")]
     pub public_api_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct SearchRequest {
     pub query: String,
+    #[schemars(schema_with = "crate::schema::usize_schema")]
     pub max_results: usize,
     pub path_substring: Option<String>,
     pub case_sensitive: bool,

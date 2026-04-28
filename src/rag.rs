@@ -43,6 +43,7 @@ pub struct RepoIndexConfig {
 pub struct Chunk {
     pub repo: String,
     pub path: String,
+    #[schemars(schema_with = "crate::schema::usize_schema")]
     pub chunk_index: usize,
     pub text: String,
     pub score: Option<f64>,
@@ -52,6 +53,7 @@ pub struct Chunk {
 pub struct IndexReposReport {
     pub indexed_roots: Vec<String>,
     pub skipped_roots: Vec<String>,
+    #[schemars(schema_with = "crate::schema::usize_schema")]
     pub chunks_indexed: usize,
 }
 

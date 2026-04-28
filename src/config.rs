@@ -14,7 +14,7 @@ pub struct ServerConfig {
 
 impl ServerConfig {
     pub fn resolved_default_repo_root(&self) -> PathBuf {
-        env::var("SAAQ_DISCOVERY_CANON_ROOT")
+        env::var("AGENTOS_CORE_CANON_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|_| self.default_repo_root.clone())
     }
@@ -35,7 +35,7 @@ impl ServerConfig {
 }
 
 pub fn discover_repo_home() -> Result<PathBuf> {
-    if let Ok(home) = env::var("SAAQ_DISCOVERY_HOME") {
+    if let Ok(home) = env::var("AGENTOS_CORE_HOME") {
         let path = PathBuf::from(home);
         if path.exists() {
             return Ok(path);
