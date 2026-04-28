@@ -1,7 +1,11 @@
-# SAAQ Discovery
+# AgentOS Core
 
-`saaq-discovery` is a local Rust MCP server that exposes authoritative `corinth-canal`
-context and bounded repo analysis to local AI clients.
+`agentos-core` is a local Rust MCP server that exposes authoritative
+`corinth-canal` context and bounded repo analysis to local AI clients.
+
+The repository and client-facing MCP server name are `agentos-core`. The
+current Rust crate and release binary are still named `saaq-discovery`, and the
+launcher script handles that internal binary path.
 
 ## Scope
 
@@ -37,7 +41,7 @@ cargo build --release
 Run the MCP server over stdio:
 
 ```bash
-./scripts/launch.sh
+/home/raulmc/MCP/agentos-core/scripts/launch.sh
 ```
 
 Or run management helpers:
@@ -46,6 +50,12 @@ Or run management helpers:
 cargo run -- doctor
 cargo run -- print-config codex
 cargo run -- install --clients codex,cursor,vscode,windsurf,trae,antigravity,jetbrains
+```
+
+Local MCP clients should register the server as `agentos-core` and point to:
+
+```text
+/home/raulmc/MCP/agentos-core/scripts/launch.sh
 ```
 
 ## Exposed MCP Features
@@ -92,3 +102,13 @@ JetBrains is handled in two ways:
 
 - update `~/.junie/mcp/mcp.json` for the JetBrains agent surface already present locally
 - emit an importable JSON snippet for the AI Assistant MCP UI
+
+## AgentOS Integration
+
+The local AgentOS tool definition lives at:
+
+```text
+/etc/agentos/tools/agentos_core.json
+```
+
+OpenCode and Cursor should use `agentos-core` as the MCP server key.
