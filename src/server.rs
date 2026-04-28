@@ -443,10 +443,9 @@ impl DiscoveryServer {
         &self,
         Parameters(request): Parameters<CallOllamaRequest>,
     ) -> Result<Json<CallOllamaResponse>, ErrorData> {
-        let response =
-            ollama_generate(&request.model, &request.prompt, "http://127.0.0.1:11434")
-                .await
-                .map_err(internal_error)?;
+        let response = ollama_generate(&request.model, &request.prompt, "http://127.0.0.1:11434")
+            .await
+            .map_err(internal_error)?;
         Ok(Json(CallOllamaResponse {
             model: request.model,
             response,
@@ -463,7 +462,9 @@ impl DiscoveryServer {
             .map_err(internal_error)
     }
 
-    #[tool(description = "Search locally indexed repo chunks through Ollama embeddings and Qdrant.")]
+    #[tool(
+        description = "Search locally indexed repo chunks through Ollama embeddings and Qdrant."
+    )]
     async fn search_repos(
         &self,
         Parameters(request): Parameters<SearchReposRequest>,
@@ -479,7 +480,9 @@ impl DiscoveryServer {
             .map_err(internal_error)
     }
 
-    #[tool(description = "Read a file from the default canon root or an explicitly provided repo root.")]
+    #[tool(
+        description = "Read a file from the default canon root or an explicitly provided repo root."
+    )]
     async fn get_file(
         &self,
         Parameters(request): Parameters<GetFileRequest>,
@@ -500,7 +503,9 @@ impl DiscoveryServer {
             ));
         }
         let path = repo_root.join(&relative);
-        let content = tokio::fs::read_to_string(&path).await.map_err(internal_error)?;
+        let content = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(internal_error)?;
         Ok(Json(GetFileResponse {
             repo_root: repo_root.display().to_string(),
             relative_path: request.relative_path,

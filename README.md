@@ -51,11 +51,80 @@ cargo run -- print-config codex
 cargo run -- install --clients codex,cursor,vscode,windsurf,trae,antigravity,jetbrains
 ```
 
+## Observability CLI Setup
+
+`agentos-core` keeps observability credentials out of the repository. Sentry and
+New Relic integration is CLI-only for now: the Rust server does not embed
+Sentry, New Relic, or OpenTelemetry SDK keys.
+
+Required environment:
+
+```bash
+export SENTRY_ORG="<sentry-org>"
+export SENTRY_PROJECT_AGENTOS_CORE="<sentry-project>"
+export SENTRY_ENVIRONMENT="local"
+
+export NEW_RELIC_ACCOUNT_ID="<account-id>"
+export NEW_RELIC_ENTITY_SEARCH_AGENTOS_CORE="name = 'agentos-core'"
+export NEW_RELIC_USER="agentos"
+```
+
+Create or update the Sentry release/deploy marker:
+
+```bash
+./scripts/observability/sentry_release.sh
+```
+
+Post a New Relic custom event:
+
+```bash
+./scripts/observability/newrelic_event.sh doctor 0 true none
+```
+
+The helper scripts derive the release from `AGENTOS_GIT_SHA` when set, otherwise
+from the current git commit. They never store tokens, DSNs, account IDs, or
+machine-specific paths in this repository.
+
 Local MCP clients should register the server as `agentos-core` and point to:
 
 ```text
 <repo-root>/scripts/launch.sh
 ```
+
+
+## RAG HTTP Orchestrator
+
+`agentos-core` can also run a local HTTP RAG/vector orchestrator:
+
+```bash
+cargo run -- serve-http --bind 127.0.0.1:8765
+```
+
+Environment knobs:
+
+```bash
+export RAG_COLLECTION=repos
+export EMBEDDING_MODEL=nomic-embed-text:latest
+export BATCH_SIZE=128
+export CHUNK_TOKENS=800
+export CHUNK_OVERLAP=0.25
+export RAG_REPO_ROOTS=/path/to/repo1:/path/to/repo2
+export RAG_INDEX_MANIFEST=/etc/agentos/configs/rag_index_manifest.json
+export AGENTOS_RAG_JWT=<optional-bearer-token>
+```
+
+Endpoints:
+
+- `POST /ingest/file` for single-file ingest or editor save hooks
+- `POST /ingest/diff` for changed file lists from commits or pushes
+- `POST /rebuild` for full rebuilds, including `dry_run`
+- `POST /cleanup` for stale or full vector cleanup
+- `POST /vectors/upsert` and `POST /vectors/delete` as the local vector MCP facade
+
+Vector metadata includes deterministic SHA256 chunk IDs, source, commit, detected
+language, chunk index, embedding model, checksum, timestamp, and tags. Qdrant
+point IDs are derived from the SHA256 IDs in UUID form so upserts/deletes remain
+stable while preserving the canonical ID in metadata and API responses.
 
 ## Exposed MCP Features
 

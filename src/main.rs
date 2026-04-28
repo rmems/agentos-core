@@ -1,5 +1,7 @@
 mod config;
+mod http;
 mod install;
+mod orchestrator;
 mod rag;
 mod repo;
 mod schema;
@@ -30,6 +32,10 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     Serve,
+    ServeHttp {
+        #[arg(long, default_value = "127.0.0.1:8765")]
+        bind: String,
+    },
     Doctor,
     PrintConfig {
         client: ClientTarget,
@@ -71,6 +77,9 @@ async fn main() -> Result<()> {
                 .await?
                 .waiting()
                 .await?;
+        }
+        Commands::ServeHttp { bind } => {
+            http::serve(&bind).await?;
         }
         Commands::Doctor => {
             println!("{}", install::doctor(&install_ctx)?);
