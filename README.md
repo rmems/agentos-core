@@ -109,16 +109,18 @@ export BATCH_SIZE=128
 export CHUNK_TOKENS=800
 export CHUNK_OVERLAP=0.25
 export RAG_REPO_ROOTS=/path/to/repo1:/path/to/repo2
-export RAG_INDEX_MANIFEST=/etc/agentos/configs/rag_index_manifest.json
+export AGENTOS_RAG_INDEX_MANIFEST=/etc/agentos/configs/rag_index_manifest.json
 export AGENTOS_RAG_JWT=<optional-bearer-token>
 ```
+
+If `AGENTOS_RAG_INDEX_MANIFEST` is unset, the server uses the AgentOS system config path when writable and otherwise falls back to the local user data directory.
 
 Endpoints:
 
 - `POST /ingest/file` for single-file ingest or editor save hooks
 - `POST /ingest/diff` for changed file lists from commits or pushes
 - `POST /rebuild` for full rebuilds, including `dry_run`
-- `POST /cleanup` for stale or full vector cleanup
+- `POST /cleanup` for full vector cleanup with `mode: "all"`; `stale` and `missing` are reserved and return explicit errors until implemented
 - `POST /vectors/upsert` and `POST /vectors/delete` as the local vector MCP facade
 
 Vector metadata includes deterministic SHA256 chunk IDs, source, commit, detected

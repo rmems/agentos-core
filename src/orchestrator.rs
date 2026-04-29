@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -10,9 +10,9 @@ use tokio::time::sleep;
 
 use crate::rag::{VectorDbConfig, load_vector_db_config};
 use crate::tools::ollama::{OllamaConfig, ollama_embed};
-use crate::tools::qdrant::{qdrant_delete_vectors, qdrant_upsert_vectors};
+use crate::tools::qdrant::{QdrantVectorRecord, qdrant_delete_vectors, qdrant_upsert_vectors};
 
-const DEFAULT_MANIFEST_PATH: &str = "/etc/agentos/configs/rag_index_manifest.json";
+const SYSTEM_MANIFEST_PATH: &str = "/etc/agentos/configs/rag_index_manifest.json";
 const DEFAULT_COLLECTION: &str = "repos";
 const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text:latest";
 const MAX_FILE_BYTES: u64 = 2_000_000;
@@ -170,10 +170,7 @@ impl Orchestrator {
             batch_size: env_usize("BATCH_SIZE", 128).max(1),
             chunk_tokens: env_usize("CHUNK_TOKENS", 800).max(1),
             chunk_overlap: env_f32("CHUNK_OVERLAP", 0.25).clamp(0.0, 0.95),
-            manifest_path: PathBuf::from(
-                env_string("RAG_INDEX_MANIFEST")
-                    .unwrap_or_else(|| DEFAULT_MANIFEST_PATH.to_string()),
-            ),
+            manifest_path: manifest_path_from_env(),
             vector_db,
             ollama,
         })
@@ -211,26 +208,59 @@ impl Orchestrator {
             .unwrap_or_else(|| request.repo.clone());
         let mut combined = OperationSummary::ok();
 
+        let mut manifest = self.load_manifest().await?;
+        let mut manifest_changed = false;
+
         for changed in request.changed_files {
-            let path = repo_root.join(&changed);
-            if path.exists() {
-                if is_binary_or_large(&path)? {
-                    combined
-                        .errors
-                        .push(format!("skipped binary or large file: {changed}"));
+            let relative = match safe_relative_path(&changed) {
+                Ok(relative) => relative,
+                Err(error) => {
+                    combined.errors.push(error.to_string());
                     continue;
                 }
-                let content = std::fs::read_to_string(&path)
-                    .with_context(|| format!("failed to read {}", path.display()))?;
-                let chunks = self.prepare_chunks(&repo_name, &changed, &content, &request.commit);
-                let partial = self.upsert_prepared(chunks, request.dry_run).await?;
+            };
+            let path = repo_root.join(&relative);
+            if path.exists() {
+                let canonical = path
+                    .canonicalize()
+                    .with_context(|| format!("failed to canonicalize {}", path.display()))?;
+                if !canonical.starts_with(&repo_root) {
+                    combined
+                        .errors
+                        .push(format!("skipped path outside repo root: {changed}"));
+                    continue;
+                }
+                if is_binary_or_large(&canonical).await? {
+                    combined
+                        .errors
+                        .push(format!("skipped binary or large file: {relative}"));
+                    continue;
+                }
+                let content = tokio::fs::read_to_string(&canonical)
+                    .await
+                    .with_context(|| format!("failed to read {}", canonical.display()))?;
+                let chunks = self.prepare_chunks(&repo_name, &relative, &content, &request.commit);
+                let partial = self
+                    .upsert_prepared_with_manifest(&mut manifest, chunks, request.dry_run)
+                    .await?;
+                manifest_changed |=
+                    !partial.upserted_ids.is_empty() || !partial.deleted_ids.is_empty();
                 merge_summary(&mut combined, partial);
             } else {
                 let deleted = self
-                    .delete_source(&format!("{repo_name}:{changed}"), request.dry_run)
+                    .delete_source_with_manifest(
+                        &mut manifest,
+                        &format!("{repo_name}:{relative}"),
+                        request.dry_run,
+                    )
                     .await?;
+                manifest_changed |= !deleted.deleted_ids.is_empty();
                 merge_summary(&mut combined, deleted);
             }
+        }
+
+        if manifest_changed && !request.dry_run {
+            self.save_manifest(&manifest).await?;
         }
 
         combined.status = if combined.errors.is_empty() {
@@ -259,6 +289,8 @@ impl Orchestrator {
 
         let roots = repo_roots_from_env();
         let mut combined = OperationSummary::ok();
+        let mut manifest = self.load_manifest().await?;
+        let mut manifest_changed = false;
         for root in roots {
             if !root.is_dir() {
                 combined
@@ -275,18 +307,27 @@ impl Orchestrator {
                     .strip_prefix(&root)?
                     .to_string_lossy()
                     .replace('\\', "/");
-                if is_binary_or_large(&file)? {
+                if is_binary_or_large(&file).await? {
                     combined
                         .errors
                         .push(format!("skipped binary or large file: {relative}"));
                     continue;
                 }
-                let content = std::fs::read_to_string(&file)
+                let content = tokio::fs::read_to_string(&file)
+                    .await
                     .with_context(|| format!("failed to read {}", file.display()))?;
                 let chunks = self.prepare_chunks(&repo_name, &relative, &content, "rebuild");
-                let partial = self.upsert_prepared(chunks, request.dry_run).await?;
+                let partial = self
+                    .upsert_prepared_with_manifest(&mut manifest, chunks, request.dry_run)
+                    .await?;
+                manifest_changed |=
+                    !partial.upserted_ids.is_empty() || !partial.deleted_ids.is_empty();
                 merge_summary(&mut combined, partial);
             }
+        }
+
+        if manifest_changed && !request.dry_run {
+            self.save_manifest(&manifest).await?;
         }
 
         combined.status = if combined.errors.is_empty() {
@@ -310,7 +351,10 @@ impl Orchestrator {
         if !matches!(request.mode.as_str(), "stale" | "missing" | "all") {
             bail!("unsupported cleanup mode: {}", request.mode);
         }
-        let manifest = self.load_manifest()?;
+        if matches!(request.mode.as_str(), "stale" | "missing") {
+            bail!("cleanup mode '{}' is not implemented yet", request.mode);
+        }
+        let manifest = self.load_manifest().await?;
         let ids = manifest.chunks.keys().cloned().collect::<Vec<_>>();
         if request.mode == "all" {
             let summary = self
@@ -319,7 +363,7 @@ impl Orchestrator {
                     ids,
                 })
                 .await?;
-            self.save_manifest(&IndexManifest::default())?;
+            self.save_manifest(&IndexManifest::default()).await?;
             return Ok(summary);
         }
         Ok(OperationSummary::ok())
@@ -328,7 +372,16 @@ impl Orchestrator {
     pub async fn vectors_upsert(&self, request: VectorUpsertRequest) -> Result<OperationSummary> {
         self.ensure_collection(&request.collection)?;
         let started = Instant::now();
-        retry_async(|| qdrant_upsert_vectors(&self.vector_db, &request.vectors)).await?;
+        let records = request
+            .vectors
+            .iter()
+            .map(|vector| QdrantVectorRecord {
+                id: &vector.id,
+                embedding: &vector.embedding,
+                metadata: &vector.metadata,
+            })
+            .collect::<Vec<_>>();
+        retry_async(|| qdrant_upsert_vectors(&self.vector_db, &records)).await?;
         let ids = request
             .vectors
             .into_iter()
@@ -420,7 +473,22 @@ impl Orchestrator {
         chunks: Vec<PreparedChunk>,
         dry_run: bool,
     ) -> Result<OperationSummary> {
-        let mut manifest = self.load_manifest()?;
+        let mut manifest = self.load_manifest().await?;
+        let summary = self
+            .upsert_prepared_with_manifest(&mut manifest, chunks, dry_run)
+            .await?;
+        if !dry_run && (!summary.upserted_ids.is_empty() || !summary.deleted_ids.is_empty()) {
+            self.save_manifest(&manifest).await?;
+        }
+        Ok(summary)
+    }
+
+    async fn upsert_prepared_with_manifest(
+        &self,
+        manifest: &mut IndexManifest,
+        chunks: Vec<PreparedChunk>,
+        dry_run: bool,
+    ) -> Result<OperationSummary> {
         let mut summary = OperationSummary::ok();
         summary.processed_chunks = chunks.len();
         let source = chunks
@@ -497,7 +565,15 @@ impl Orchestrator {
                 }
             }
             if !records.is_empty() {
-                retry_async(|| qdrant_upsert_vectors(&self.vector_db, &records)).await?;
+                let qdrant_records = records
+                    .iter()
+                    .map(|record| QdrantVectorRecord {
+                        id: &record.id,
+                        embedding: &record.embedding,
+                        metadata: &record.metadata,
+                    })
+                    .collect::<Vec<_>>();
+                retry_async(|| qdrant_upsert_vectors(&self.vector_db, &qdrant_records)).await?;
                 emit_event(
                     "embed_batch_success",
                     records.len(),
@@ -529,7 +605,6 @@ impl Orchestrator {
             summary.deleted_ids.extend(removed);
         }
 
-        self.save_manifest(&manifest)?;
         if !summary.errors.is_empty() {
             summary.status = "partial".to_string();
         }
@@ -537,7 +612,22 @@ impl Orchestrator {
     }
 
     async fn delete_source(&self, source: &str, dry_run: bool) -> Result<OperationSummary> {
-        let mut manifest = self.load_manifest()?;
+        let mut manifest = self.load_manifest().await?;
+        let summary = self
+            .delete_source_with_manifest(&mut manifest, source, dry_run)
+            .await?;
+        if !dry_run && !summary.deleted_ids.is_empty() {
+            self.save_manifest(&manifest).await?;
+        }
+        Ok(summary)
+    }
+
+    async fn delete_source_with_manifest(
+        &self,
+        manifest: &mut IndexManifest,
+        source: &str,
+        dry_run: bool,
+    ) -> Result<OperationSummary> {
         let ids = manifest
             .chunks
             .values()
@@ -549,7 +639,6 @@ impl Orchestrator {
             for id in &ids {
                 manifest.chunks.remove(id);
             }
-            self.save_manifest(&manifest)?;
         }
         Ok(OperationSummary {
             status: "ok".to_string(),
@@ -560,23 +649,26 @@ impl Orchestrator {
         })
     }
 
-    fn load_manifest(&self) -> Result<IndexManifest> {
-        if !self.manifest_path.exists() {
+    async fn load_manifest(&self) -> Result<IndexManifest> {
+        if tokio::fs::metadata(&self.manifest_path).await.is_err() {
             return Ok(IndexManifest::default());
         }
-        let raw = std::fs::read_to_string(&self.manifest_path)
+        let raw = tokio::fs::read_to_string(&self.manifest_path)
+            .await
             .with_context(|| format!("failed to read {}", self.manifest_path.display()))?;
         serde_json::from_str(&raw)
             .with_context(|| format!("failed to parse {}", self.manifest_path.display()))
     }
 
-    fn save_manifest(&self, manifest: &IndexManifest) -> Result<()> {
+    async fn save_manifest(&self, manifest: &IndexManifest) -> Result<()> {
         if let Some(parent) = self.manifest_path.parent() {
-            std::fs::create_dir_all(parent)
+            tokio::fs::create_dir_all(parent)
+                .await
                 .with_context(|| format!("failed to create {}", parent.display()))?;
         }
         let raw = serde_json::to_string_pretty(manifest)?;
-        std::fs::write(&self.manifest_path, raw)
+        tokio::fs::write(&self.manifest_path, raw)
+            .await
             .with_context(|| format!("failed to write {}", self.manifest_path.display()))
     }
 }
@@ -674,6 +766,7 @@ fn chunk_code(content: &str, chunk_tokens: usize) -> Vec<String> {
 }
 
 fn chunk_tokens_window(content: &str, chunk_tokens: usize, overlap: f32) -> Vec<String> {
+    let chunk_tokens = effective_chunk_tokens(chunk_tokens);
     let words = content.split_whitespace().collect::<Vec<_>>();
     if words.is_empty() {
         return Vec::new();
@@ -713,7 +806,33 @@ fn is_code_path(path: &str) -> bool {
 }
 
 fn approx_tokens(content: &str) -> usize {
-    content.split_whitespace().count()
+    let words = content.split_whitespace().count();
+    let punctuation = content
+        .bytes()
+        .filter(|byte| {
+            matches!(
+                byte,
+                b'{' | b'}'
+                    | b'('
+                    | b')'
+                    | b'['
+                    | b']'
+                    | b'.'
+                    | b':'
+                    | b';'
+                    | b','
+                    | b'_'
+                    | b'-'
+                    | b'/'
+                    | b'\\'
+            )
+        })
+        .count();
+    words + (punctuation / 4)
+}
+
+fn effective_chunk_tokens(chunk_tokens: usize) -> usize {
+    ((chunk_tokens as f32) * 0.75).floor().max(1.0) as usize
 }
 
 fn detect_lang(path: &str) -> &'static str {
@@ -732,25 +851,69 @@ fn detect_lang(path: &str) -> &'static str {
 
 fn split_source_path(path: &str) -> (String, String) {
     if let Some((repo, relative)) = path.split_once(':') {
-        return (repo.to_string(), relative.to_string());
+        return (repo.to_string(), normalize_path_string(relative));
     }
+
     let path = PathBuf::from(path);
-    let repo = path
-        .parent()
-        .and_then(|parent| parent.file_name())
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "repo".to_string());
-    let relative = path
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.to_string_lossy().to_string());
-    (repo, relative)
+    if path.is_absolute() {
+        if let Some((repo, relative)) = split_absolute_source_path(&path) {
+            return (repo, relative);
+        }
+    }
+
+    let normalized = normalize_path_string(&path.to_string_lossy());
+    let mut parts = normalized.split('/').collect::<Vec<_>>();
+    if parts.len() > 1 {
+        let repo = parts.remove(0).to_string();
+        return (repo, parts.join("/"));
+    }
+    ("repo".to_string(), normalized)
+}
+
+fn split_absolute_source_path(path: &Path) -> Option<(String, String)> {
+    for root in repo_roots_from_env() {
+        let Ok(root) = root.canonicalize() else {
+            continue;
+        };
+        if path.starts_with(&root) {
+            let repo = root.file_name()?.to_string_lossy().to_string();
+            let relative = path.strip_prefix(&root).ok()?.to_string_lossy();
+            return Some((repo, normalize_path_string(&relative)));
+        }
+    }
+    None
+}
+
+fn normalize_path_string(path: &str) -> String {
+    path.replace('\\', "/")
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn safe_relative_path(path: &str) -> Result<String> {
+    let candidate = Path::new(path);
+    if candidate.is_absolute() {
+        bail!("skipped absolute path outside repo root: {path}");
+    }
+    if candidate.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir
+        )
+    }) {
+        bail!("skipped unsafe relative path: {path}");
+    }
+    Ok(normalize_path_string(path))
 }
 
 fn resolve_repo_root(repo: &str) -> Result<PathBuf> {
     let direct = PathBuf::from(repo);
     if direct.is_dir() {
-        return Ok(direct);
+        return direct
+            .canonicalize()
+            .with_context(|| format!("failed to canonicalize repo root: {repo}"));
     }
     for root in repo_roots_from_env() {
         if root
@@ -758,7 +921,9 @@ fn resolve_repo_root(repo: &str) -> Result<PathBuf> {
             .map(|name| name.to_string_lossy() == repo)
             .unwrap_or(false)
         {
-            return Ok(root);
+            return root
+                .canonicalize()
+                .with_context(|| format!("failed to canonicalize repo root: {}", root.display()));
         }
     }
     bail!("unable to resolve repo root: {repo}")
@@ -830,9 +995,10 @@ fn is_indexable_path(path: &Path) -> bool {
     )
 }
 
-fn is_binary_or_large(path: &Path) -> Result<bool> {
-    let metadata =
-        std::fs::metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
+async fn is_binary_or_large(path: &Path) -> Result<bool> {
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .with_context(|| format!("failed to stat {}", path.display()))?;
     if metadata.len() > MAX_FILE_BYTES {
         return Ok(true);
     }
@@ -846,6 +1012,40 @@ fn chunk_id(source_path: &str, chunk_index: usize) -> String {
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn manifest_path_from_env() -> PathBuf {
+    env_string("AGENTOS_RAG_INDEX_MANIFEST")
+        .or_else(|| env_string("RAG_INDEX_MANIFEST"))
+        .map(PathBuf::from)
+        .unwrap_or_else(default_manifest_path)
+}
+
+fn default_manifest_path() -> PathBuf {
+    let system_path = PathBuf::from(SYSTEM_MANIFEST_PATH);
+    if system_path
+        .parent()
+        .map(|parent| parent.is_dir() && is_writable_dir(parent))
+        .unwrap_or(false)
+    {
+        return system_path;
+    }
+    dirs::data_local_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        .join("agentos")
+        .join("rag_index_manifest.json")
+}
+
+fn is_writable_dir(path: &Path) -> bool {
+    let test_path = path.join(format!(".agentos-write-test-{}", std::process::id()));
+    match std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&test_path)
+    {
+        Ok(_) => std::fs::remove_file(test_path).is_ok(),
+        Err(_) => false,
+    }
 }
 
 fn env_string(name: &str) -> Option<String> {
@@ -893,5 +1093,31 @@ mod tests {
         let content = "fn a() {}\n\nfn b() {}\n";
         let chunks = chunk_content("src/lib.rs", content, 2, 0.0);
         assert!(!chunks.is_empty());
+    }
+
+    #[test]
+    fn unsafe_diff_paths_are_rejected() {
+        assert!(safe_relative_path("../secret.txt").is_err());
+        assert!(safe_relative_path("/etc/passwd").is_err());
+        assert_eq!(safe_relative_path("src/main.rs").unwrap(), "src/main.rs");
+    }
+
+    #[test]
+    fn split_source_path_preserves_deep_relative_paths() {
+        let left = split_source_path("repo/src/main.rs");
+        let right = split_source_path("other/src/main.rs");
+
+        assert_eq!(left, ("repo".to_string(), "src/main.rs".to_string()));
+        assert_eq!(right, ("other".to_string(), "src/main.rs".to_string()));
+        assert_ne!(
+            format!("{}:{}", left.0, left.1),
+            format!("{}:{}", right.0, right.1)
+        );
+    }
+
+    #[test]
+    fn approx_tokens_counts_code_density() {
+        assert!(approx_tokens("foo.bar_baz(qux);") > 1);
+        assert_eq!(effective_chunk_tokens(800), 600);
     }
 }

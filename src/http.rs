@@ -15,8 +15,21 @@ use crate::orchestrator::{
     RebuildRequest, VectorDeleteRequest, VectorUpsertRequest,
 };
 
+#[derive(Clone)]
+struct HttpState {
+    orchestrator: Arc<Orchestrator>,
+    auth_token: Option<Arc<str>>,
+}
+
 pub async fn serve(bind: &str) -> Result<()> {
-    let state = Arc::new(Orchestrator::from_env()?);
+    let state = Arc::new(HttpState {
+        orchestrator: Arc::new(Orchestrator::from_env()?),
+        auth_token: std::env::var("AGENTOS_RAG_JWT")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(Arc::<str>::from),
+    });
     let app = Router::new()
         .route("/ingest/file", post(ingest_file))
         .route("/ingest/diff", post(ingest_diff))
@@ -24,8 +37,8 @@ pub async fn serve(bind: &str) -> Result<()> {
         .route("/cleanup", post(cleanup))
         .route("/vectors/upsert", post(vectors_upsert))
         .route("/vectors/delete", post(vectors_delete))
-        .with_state(state)
-        .layer(middleware::from_fn(auth));
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, auth));
 
     let addr = bind
         .parse::<SocketAddr>()
@@ -39,11 +52,13 @@ pub async fn serve(bind: &str) -> Result<()> {
         .context("RAG HTTP server failed")
 }
 
-async fn auth(headers: HeaderMap, request: Request<Body>, next: Next) -> Response {
-    let expected = std::env::var("AGENTOS_RAG_JWT")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let Some(expected) = expected else {
+async fn auth(
+    State(state): State<Arc<HttpState>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let Some(expected) = state.auth_token.as_ref() else {
         return next.run(request).await;
     };
 
@@ -51,7 +66,7 @@ async fn auth(headers: HeaderMap, request: Request<Body>, next: Next) -> Respons
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .map(|token| token == expected)
+        .map(|token| constant_time_eq(token.as_bytes(), expected.as_bytes()))
         .unwrap_or(false);
 
     if authorized {
@@ -61,46 +76,56 @@ async fn auth(headers: HeaderMap, request: Request<Body>, next: Next) -> Respons
     }
 }
 
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    left.iter()
+        .zip(right.iter())
+        .fold(0u8, |acc, (left, right)| acc | (left ^ right))
+        == 0
+}
+
 async fn ingest_file(
-    State(orchestrator): State<Arc<Orchestrator>>,
+    State(state): State<Arc<HttpState>>,
     Json(request): Json<FileIngestRequest>,
 ) -> Response {
-    respond(orchestrator.ingest_file(request).await)
+    respond(state.orchestrator.ingest_file(request).await)
 }
 
 async fn ingest_diff(
-    State(orchestrator): State<Arc<Orchestrator>>,
+    State(state): State<Arc<HttpState>>,
     Json(request): Json<DiffIngestRequest>,
 ) -> Response {
-    respond(orchestrator.ingest_diff(request).await)
+    respond(state.orchestrator.ingest_diff(request).await)
 }
 
 async fn rebuild(
-    State(orchestrator): State<Arc<Orchestrator>>,
+    State(state): State<Arc<HttpState>>,
     Json(request): Json<RebuildRequest>,
 ) -> Response {
-    respond(orchestrator.rebuild(request).await)
+    respond(state.orchestrator.rebuild(request).await)
 }
 
 async fn cleanup(
-    State(orchestrator): State<Arc<Orchestrator>>,
+    State(state): State<Arc<HttpState>>,
     Json(request): Json<CleanupRequest>,
 ) -> Response {
-    respond(orchestrator.cleanup(request).await)
+    respond(state.orchestrator.cleanup(request).await)
 }
 
 async fn vectors_upsert(
-    State(orchestrator): State<Arc<Orchestrator>>,
+    State(state): State<Arc<HttpState>>,
     Json(request): Json<VectorUpsertRequest>,
 ) -> Response {
-    respond(orchestrator.vectors_upsert(request).await)
+    respond(state.orchestrator.vectors_upsert(request).await)
 }
 
 async fn vectors_delete(
-    State(orchestrator): State<Arc<Orchestrator>>,
+    State(state): State<Arc<HttpState>>,
     Json(request): Json<VectorDeleteRequest>,
 ) -> Response {
-    respond(orchestrator.vectors_delete(request).await)
+    respond(state.orchestrator.vectors_delete(request).await)
 }
 
 fn respond(result: Result<OperationSummary>) -> Response {
@@ -117,5 +142,17 @@ fn respond(result: Result<OperationSummary>) -> Response {
             };
             (StatusCode::INTERNAL_SERVER_ERROR, Json(summary)).into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constant_time_eq_matches_equal_bytes() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(!constant_time_eq(b"secret", b"secrex"));
+        assert!(!constant_time_eq(b"secret", b"secret-longer"));
     }
 }

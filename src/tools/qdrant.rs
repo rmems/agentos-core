@@ -1,6 +1,13 @@
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 
 use crate::rag::VectorDbConfig;
+
+pub struct QdrantVectorRecord<'a> {
+    pub id: &'a str,
+    pub embedding: &'a [f32],
+    pub metadata: &'a serde_json::Value,
+}
 
 pub async fn qdrant_upsert(
     cfg: &VectorDbConfig,
@@ -36,7 +43,7 @@ pub async fn qdrant_upsert(
 
 pub async fn qdrant_upsert_vectors(
     cfg: &VectorDbConfig,
-    vectors: &[crate::orchestrator::VectorRecord],
+    vectors: &[QdrantVectorRecord<'_>],
 ) -> Result<()> {
     if vectors.is_empty() {
         return Ok(());
@@ -99,14 +106,22 @@ fn qdrant_point_id(id: &str) -> String {
     if is_uuid(id) {
         return id.to_string();
     }
-    let hex = if id.len() >= 32 && id.chars().take(32).all(|ch| ch.is_ascii_hexdigit()) {
-        id[..32].to_ascii_lowercase()
+
+    let bytes = id.as_bytes();
+    let uuid_bytes = if bytes.len() >= 32 && bytes[..32].iter().all(|byte| byte.is_ascii_hexdigit())
+    {
+        decode_hex_16(&bytes[..32])
     } else {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        id.hash(&mut hasher);
-        format!("{:016x}{:016x}", hasher.finish(), hasher.finish())
+        let digest = Sha256::digest(bytes);
+        let mut out = [0u8; 16];
+        out.copy_from_slice(&digest[..16]);
+        out
     };
+
+    let hex = uuid_bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     format!(
         "{}-{}-{}-{}-{}",
         &hex[0..8],
@@ -128,4 +143,42 @@ fn is_uuid(id: &str) -> bool {
             .chars()
             .filter(|ch| *ch != '-')
             .all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn decode_hex_16(hex: &[u8]) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    for (idx, pair) in hex.chunks_exact(2).enumerate() {
+        bytes[idx] = (hex_value(pair[0]) << 4) | hex_value(pair[1]);
+    }
+    bytes
+}
+
+fn hex_value(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        b'A'..=b'F' => byte - b'A' + 10,
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fallback_point_id_is_stable_uuid_shape() {
+        let first = qdrant_point_id("agentos-core:src/main.rs:0");
+        let second = qdrant_point_id("agentos-core:src/main.rs:0");
+
+        assert_eq!(first, second);
+        assert!(is_uuid(&first));
+    }
+
+    #[test]
+    fn fallback_point_id_handles_non_ascii() {
+        let point_id = qdrant_point_id("repo:src/\u{fc}mlaut.rs:0");
+
+        assert!(is_uuid(&point_id));
+    }
 }
