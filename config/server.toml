@@ -1,9 +1,0 @@
-server_name = "agentos-core"
-default_repo_root = "."
-default_pinned_terms = ["AgentOS", "RAG", "MCP", "Qdrant", "Ollama"]
-default_invariants = [
-  "Treat the current repo as authoritative for implementation details.",
-  "Use shared canon only for terminology resolution.",
-  "Do not import assumptions from sibling repos unless the context explicitly names them.",
-  "If a term is ambiguous across repos, stop and surface the ambiguity rather than normalizing it.",
-]
