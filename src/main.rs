@@ -17,7 +17,7 @@ use rmcp::ServiceExt;
 use tracing_subscriber::FmtSubscriber;
 
 use crate::config::{discover_repo_home, load_server_config};
-use crate::router::ModelRouter;
+use crate::router::{ModelRouter, ProviderRole};
 use crate::server::DiscoveryServer;
 
 #[derive(Debug, Parser)]
@@ -96,12 +96,18 @@ async fn main() -> Result<()> {
         Commands::Route { provider } => {
             if let Some(p) = provider {
                 println!("provider={}", p);
-                // Validate the provider selection
-                if let Some(router) = ModelRouter::from_env().ok() {
-                    println!("model={}", router.name());
-                }
+                let _ = ModelRouter::from_env();
             } else {
-                println!("provider=ollama (default)");
+                let router = ModelRouter::default();
+                println!("# Role-based providers:");
+                println!("default_coding: {} (default)", router.roles.first().map(|r| r.provider.name()).unwrap_or("ollama"));
+                println!("fallback: {} (default)", router.get_fallback().map(|r| r.provider.name()).unwrap_or("ollama"));
+                println!("rag_embedding: {} (default)", router.get_embedding_provider().map(|r| r.provider.name()).unwrap_or("ollama"));
+                println!("\n# Environment variables:");
+                for role in ProviderRole::all() {
+                    println!("- {} (provider name)", role.to_env_key());
+                    println!("- {}_MODEL (model name)", role.to_env_key());
+                }
             }
         }
         Commands::Install { clients, dry_run } => {

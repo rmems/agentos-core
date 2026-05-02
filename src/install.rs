@@ -396,8 +396,18 @@ pub fn doctor_checks() -> Vec<(String, String)> {
         checks.push(("ollama".to_string(), "not running".to_string()));
     }
 
-    // Check cloud provider API keys
-    let provider_vars = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "AZURE_OPENAI_API_KEY"];
+    // Check all cloud provider API keys
+    let provider_vars = [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_AI_STUDIO_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "NVIDIA_API_KEY",
+        "NVIDIA_NIM_API_KEY",
+        "OLLAMA_API_KEY",
+    ];
     for var in provider_vars {
         let status = if std::env::var(var).is_ok() {
             "configured"
@@ -407,9 +417,73 @@ pub fn doctor_checks() -> Vec<(String, String)> {
         checks.push((var.to_string(), status.to_string()));
     }
 
+    // Check Ollama host
+    let ollama_host = std::env::var("OLLAMA_HOST").unwrap_or_default();
+    checks.push((
+        "OLLAMA_HOST".to_string(),
+        if ollama_host.is_empty() {
+            "default".to_string()
+        } else {
+            ollama_host
+        },
+    ));
+
     // Check RAG_REPO_ROOTS
     let rag_roots = std::env::var("RAG_REPO_ROOTS").unwrap_or_default();
-    checks.push(("RAG_REPO_ROOTS".to_string(), if rag_roots.is_empty() { "not set".to_string() } else { rag_roots }));
+    if rag_roots.is_empty() {
+        checks.push(("RAG_REPO_ROOTS".to_string(), "not set".to_string()));
+    } else {
+        let roots: Vec<&str> = rag_roots.split(':').filter(|s| !s.trim().is_empty()).collect();
+        let valid_count = roots
+            .iter()
+            .filter(|root| std::path::Path::new(*root).is_dir())
+            .count();
+        checks.push((
+            "RAG_REPO_ROOTS".to_string(),
+            format!("{} paths ({} valid)", roots.len(), valid_count),
+        ));
+    }
+
+    // Check RAG_COLLECTION
+    let rag_collection = std::env::var("RAG_COLLECTION")
+        .or_else(|_| std::env::var("COLLECTION_NAME"))
+        .unwrap_or_else(|_| "repos".to_string());
+    checks.push(("RAG_COLLECTION".to_string(), rag_collection));
+
+    // Check index manifest
+    let manifest_path = std::env::var("AGENTOS_RAG_INDEX_MANIFEST")
+        .or_else(|_| std::env::var("RAG_INDEX_MANIFEST"))
+        .unwrap_or_else(|_| {
+            let custom = dirs::data_local_dir()
+                .map(|d| d.join("agentos").join("rag_index_manifest.json").to_string_lossy().to_string());
+            custom.unwrap_or("/etc/agentos/configs/rag_index_manifest.json".to_string())
+        });
+
+    let manifest_exists = std::path::Path::new(&manifest_path).exists();
+    if manifest_exists {
+        if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
+            if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&raw) {
+                let chunk_count = manifest
+                    .get("chunks")
+                    .and_then(|c| c.as_object())
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                checks.push((
+                    "index_manifest".to_string(),
+                    format!("exists ({} chunks)", chunk_count),
+                ));
+            } else {
+                checks.push(("index_manifest".to_string(), "exists (invalid)".to_string()));
+            }
+        } else {
+            checks.push(("index_manifest".to_string(), "exists (unreadable)".to_string()));
+        }
+    } else {
+        checks.push((
+            "index_manifest".to_string(),
+            format!("not found ({})", manifest_path),
+        ));
+    }
 
     checks
 }
