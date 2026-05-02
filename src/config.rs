@@ -42,7 +42,13 @@ pub fn discover_repo_home() -> Result<PathBuf> {
         }
     }
 
+    // First check for config/server.toml in current directory
     let mut current = env::current_dir().context("failed to resolve current directory")?;
+    if current.join("config/server.toml").exists() {
+        return Ok(current);
+    }
+
+    // Then walk up ancestors
     loop {
         if current.join("config/server.toml").exists() {
             return Ok(current);
@@ -52,7 +58,7 @@ pub fn discover_repo_home() -> Result<PathBuf> {
         }
     }
 
-    bail!("unable to locate repo home: expected config/server.toml in current directory ancestry")
+    bail!("unable to locate repo home: expected config/server.toml in current directory or ancestors")
 }
 
 pub fn load_server_config(repo_home: &Path) -> Result<ServerConfig> {

@@ -4,6 +4,7 @@ mod install;
 mod orchestrator;
 mod rag;
 mod repo;
+mod router;
 mod schema;
 mod server;
 mod session;
@@ -16,6 +17,7 @@ use rmcp::ServiceExt;
 use tracing_subscriber::FmtSubscriber;
 
 use crate::config::{discover_repo_home, load_server_config};
+use crate::router::ModelRouter;
 use crate::server::DiscoveryServer;
 
 #[derive(Debug, Parser)]
@@ -39,6 +41,10 @@ enum Commands {
     Doctor,
     PrintConfig {
         client: ClientTarget,
+    },
+    Route {
+        #[arg(long)]
+        provider: Option<String>,
     },
     Install {
         #[arg(long, value_delimiter = ',')]
@@ -86,6 +92,17 @@ async fn main() -> Result<()> {
         }
         Commands::PrintConfig { client } => {
             println!("{}", install::print_config(&install_ctx, client)?);
+        }
+        Commands::Route { provider } => {
+            if let Some(p) = provider {
+                println!("provider={}", p);
+                // Validate the provider selection
+                if let Some(router) = ModelRouter::from_env().ok() {
+                    println!("model={}", router.name());
+                }
+            } else {
+                println!("provider=ollama (default)");
+            }
         }
         Commands::Install { clients, dry_run } => {
             for line in install::install(&install_ctx, &clients, dry_run)? {

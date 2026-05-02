@@ -227,6 +227,11 @@ pub fn doctor(ctx: &InstallContext) -> Result<String> {
     lines.push(format!("repo_home={}", ctx.repo_home.display()));
     lines.push(format!("launcher={}", ctx.launcher_path().display()));
 
+    // Add infrastructure checks
+    for (name, status) in doctor_checks() {
+        lines.push(format!("{name}: {status}"));
+    }
+
     let checks = [
         ("cursor", home_path(".cursor/mcp.json")?),
         ("vscode", home_path(".config/Code/User/mcp.json")?),
@@ -351,4 +356,60 @@ fn codex_has_server() -> Result<bool> {
         .output()
         .context("failed to run codex mcp list")?;
     Ok(String::from_utf8_lossy(&output.stdout).contains(SERVER_KEY))
+}
+
+pub fn doctor_checks() -> Vec<(String, String)> {
+    let mut checks = Vec::new();
+
+    // Check Qdrant
+    if let Ok(output) = Command::new("curl")
+        .args(["-s", "http://127.0.0.1:6333/readyz"])
+        .output()
+    {
+        let status = if output.status.success() {
+            let body = String::from_utf8_lossy(&output.stdout);
+            if body.contains("ready") {
+                "ok"
+            } else {
+                "degraded"
+            }
+        } else {
+            "unreachable"
+        };
+        checks.push(("qdrant".to_string(), status.to_string()));
+    } else {
+        checks.push(("qdrant".to_string(), "not running".to_string()));
+    }
+
+    // Check Ollama
+    if let Ok(output) = Command::new("curl")
+        .args(["-s", "http://127.0.0.1:11434/api/tags"])
+        .output()
+    {
+        let status = if output.status.success() {
+            "ok"
+        } else {
+            "unreachable"
+        };
+        checks.push(("ollama".to_string(), status.to_string()));
+    } else {
+        checks.push(("ollama".to_string(), "not running".to_string()));
+    }
+
+    // Check cloud provider API keys
+    let provider_vars = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "AZURE_OPENAI_API_KEY"];
+    for var in provider_vars {
+        let status = if std::env::var(var).is_ok() {
+            "configured"
+        } else {
+            "not set"
+        };
+        checks.push((var.to_string(), status.to_string()));
+    }
+
+    // Check RAG_REPO_ROOTS
+    let rag_roots = std::env::var("RAG_REPO_ROOTS").unwrap_or_default();
+    checks.push(("RAG_REPO_ROOTS".to_string(), if rag_roots.is_empty() { "not set".to_string() } else { rag_roots }));
+
+    checks
 }
