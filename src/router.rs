@@ -124,16 +124,6 @@ impl Default for ModelRouter {
         Self {
             roles: vec![
                 RoleProvider {
-                    role: ProviderRole::DefaultCoding,
-                    provider: ModelProvider::Ollama,
-                    model: Some("llama3.2".to_string()),
-                },
-                RoleProvider {
-                    role: ProviderRole::Fallback,
-                    provider: ModelProvider::Ollama,
-                    model: Some("llama3.2".to_string()),
-                },
-                RoleProvider {
                     role: ProviderRole::RagEmbedding,
                     provider: ModelProvider::Ollama,
                     model: Some("nomic-embed-text:latest".to_string()),
@@ -253,10 +243,9 @@ mod tests {
     }
 
     #[test]
-    fn default_router_has_ollama_as_fallback() {
+    fn default_router_has_no_fallback_by_default() {
         let router = ModelRouter::default();
         let fallback = router.get_fallback();
-        assert!(fallback.is_some());
-        assert_eq!(fallback.unwrap().provider, ModelProvider::Ollama);
+        assert!(fallback.is_none());
     }
 }
