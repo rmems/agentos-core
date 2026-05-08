@@ -58,6 +58,7 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
+    Index,
 }
 
 #[tokio::main]
@@ -136,6 +137,16 @@ async fn main() -> Result<()> {
             for line in install::uninstall(&install_ctx, &clients, dry_run)? {
                 println!("{line}");
             }
+        }
+        Commands::Index => {
+            let rag = crate::rag::load_rag_config()?;
+            let db = crate::rag::load_vector_db_config()?;
+            println!("Indexing repositories into Qdrant...");
+            let report = crate::rag::index_default_repos(&rag, &db).await?;
+            println!("Indexing complete!");
+            println!("Indexed roots: {:?}", report.indexed_roots);
+            println!("Skipped roots: {:?}", report.skipped_roots);
+            println!("Chunks indexed: {}", report.chunks_indexed);
         }
     }
 

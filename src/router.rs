@@ -4,17 +4,21 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ModelProvider {
     Ollama,
     OllamaCloud,
-    OpenAI,
+    Openai,
     Anthropic,
+    #[serde(rename = "google-ai-studio")]
     GoogleAiStudio,
     Google,
     Azure,
-    OpenRouter,
+    Openrouter,
+    #[serde(rename = "nvidia-nim")]
     NvidiaNim,
     Codex,
+    #[serde(rename = "opencode")]
     OpenCode,
 }
 
@@ -23,12 +27,12 @@ impl ModelProvider {
         match self {
             Self::Ollama => "ollama",
             Self::OllamaCloud => "ollama-cloud",
-            Self::OpenAI => "openai",
+            Self::Openai => "openai",
             Self::Anthropic => "anthropic",
             Self::GoogleAiStudio => "google-ai-studio",
             Self::Google => "google",
             Self::Azure => "azure",
-            Self::OpenRouter => "openrouter",
+            Self::Openrouter => "openrouter",
             Self::NvidiaNim => "nvidia-nim",
             Self::Codex => "codex",
             Self::OpenCode => "opencode",
@@ -39,12 +43,12 @@ impl ModelProvider {
         match s.to_lowercase().as_str() {
             "ollama" => Some(Self::Ollama),
             "ollama-cloud" | "ollamacloud" => Some(Self::OllamaCloud),
-            "openai" => Some(Self::OpenAI),
+            "openai" => Some(Self::Openai),
             "anthropic" => Some(Self::Anthropic),
             "google-ai-studio" | "googleaistudio" => Some(Self::GoogleAiStudio),
             "google" => Some(Self::Google),
             "azure" => Some(Self::Azure),
-            "openrouter" => Some(Self::OpenRouter),
+            "openrouter" => Some(Self::Openrouter),
             "nvidia-nim" | "nvidianim" => Some(Self::NvidiaNim),
             "codex" => Some(Self::Codex),
             "opencode" => Some(Self::OpenCode),
@@ -58,6 +62,7 @@ impl ModelProvider {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "PascalCase")]
 pub enum ProviderRole {
     DefaultCoding,
     LongContext,
@@ -119,8 +124,18 @@ pub struct ModelRouter {
     pub roles: Vec<RoleProvider>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelRouterConfig {
+    pub roles: Vec<RoleProvider>,
+}
+
 impl Default for ModelRouter {
     fn default() -> Self {
+        // Try to load from /etc/agentos/configs/model_router.json first
+        if let Ok(config) = Self::load_config() {
+            return config;
+        }
+
         Self {
             roles: vec![
                 RoleProvider {
@@ -134,6 +149,18 @@ impl Default for ModelRouter {
 }
 
 impl ModelRouter {
+    pub fn load_config() -> Result<Self> {
+        let path = "/etc/agentos/configs/model_router.json";
+        if !std::path::Path::new(path).exists() {
+            return Err(anyhow::anyhow!("config file not found at {}", path));
+        }
+        let raw = std::fs::read_to_string(path)?;
+        let config: ModelRouterConfig = serde_json::from_str(&raw)?;
+        Ok(Self {
+            roles: config.roles,
+        })
+    }
+
     pub fn from_env() -> Result<Self> {
         let mut roles: Vec<RoleProvider> = Vec::new();
         let all_roles = ProviderRole::all();
@@ -147,13 +174,13 @@ impl ModelRouter {
             if let Some(p) = provider {
                 if p.requires_api_key() {
                     let (key_var, provider_name) = match p {
-                        ModelProvider::OpenAI => ("OPENAI_API_KEY", "openai"),
+                        ModelProvider::Openai => ("OPENAI_API_KEY", "openai"),
                         ModelProvider::Anthropic => ("ANTHROPIC_API_KEY", "anthropic"),
                         ModelProvider::GoogleAiStudio | ModelProvider::Google => {
                             ("GOOGLE_API_KEY", "google")
                         }
                         ModelProvider::Azure => ("AZURE_OPENAI_API_KEY", "azure"),
-                        ModelProvider::OpenRouter => ("OPENROUTER_API_KEY", "openrouter"),
+                        ModelProvider::Openrouter => ("OPENROUTER_API_KEY", "openrouter"),
                         ModelProvider::NvidiaNim => ("NVIDIA_NIM_API_KEY", "nvidia-nim"),
                         ModelProvider::OllamaCloud => ("OLLAMA_API_KEY", "ollama-cloud"),
                         _ => ("", ""),
@@ -198,17 +225,17 @@ mod tests {
 
     #[test]
     fn model_provider_from_str_handles_case_insensitive() {
-        assert_eq!(ModelProvider::from_str("OPENAI"), Some(ModelProvider::OpenAI));
-        assert_eq!(ModelProvider::from_str("openai"), Some(ModelProvider::OpenAI));
-        assert_eq!(ModelProvider::from_str("OpenAI"), Some(ModelProvider::OpenAI));
+        assert_eq!(ModelProvider::from_str("OPENAI"), Some(ModelProvider::Openai));
+        assert_eq!(ModelProvider::from_str("openai"), Some(ModelProvider::Openai));
+        assert_eq!(ModelProvider::from_str("OpenAI"), Some(ModelProvider::Openai));
     }
 
     #[test]
     fn model_provider_requires_api_key() {
         assert!(!ModelProvider::Ollama.requires_api_key());
-        assert!(ModelProvider::OpenAI.requires_api_key());
+        assert!(ModelProvider::Openai.requires_api_key());
         assert!(ModelProvider::Anthropic.requires_api_key());
-        assert!(ModelProvider::OpenRouter.requires_api_key());
+        assert!(ModelProvider::Openrouter.requires_api_key());
     }
 
     #[test]
