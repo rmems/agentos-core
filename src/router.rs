@@ -69,18 +69,6 @@ pub enum ProviderRole {
 }
 
 impl ProviderRole {
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "default_coding" => Some(Self::DefaultCoding),
-            "long_context" => Some(Self::LongContext),
-            "local_private" => Some(Self::LocalPrivate),
-            "rag_embedding" => Some(Self::RagEmbedding),
-            "rag_embedding_cloud" => Some(Self::RagEmbeddingCloud),
-            "cuda_gpu" => Some(Self::CudaGpu),
-            "fallback" => Some(Self::Fallback),
-            _ => None,
-        }
-    }
 
     pub fn to_env_key(&self) -> String {
         match self {
@@ -129,8 +117,6 @@ pub struct RoleProvider {
 #[derive(Debug, Clone)]
 pub struct ModelRouter {
     pub roles: Vec<RoleProvider>,
-    pub ollama_endpoint: String,
-    pub ollama_model: String,
 }
 
 impl Default for ModelRouter {
@@ -153,10 +139,6 @@ impl Default for ModelRouter {
                     model: Some("nomic-embed-text:latest".to_string()),
                 },
             ],
-            ollama_endpoint: env::var("OLLAMA_ENDPOINT")
-                .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string()),
-            ollama_model: env::var("OLLAMA_MODEL")
-                .unwrap_or_else(|_| "llama3.2".to_string()),
         }
     }
 }
@@ -212,10 +194,6 @@ impl ModelRouter {
 
         Ok(Self {
             roles,
-            ollama_endpoint: env::var("OLLAMA_ENDPOINT")
-                .unwrap_or_else(|_| "http://127.0.0.1:11434".to_string()),
-            ollama_model: env::var("OLLAMA_MODEL")
-                .unwrap_or_else(|_| "llama3.2".to_string()),
         })
     }
 
