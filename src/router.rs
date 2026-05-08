@@ -190,17 +190,6 @@ impl ModelRouter {
     pub fn get_provider(&self, role: ProviderRole) -> Option<&RoleProvider> {
         self.roles.iter().find(|r| r.role == role)
     }
-
-    pub fn get_fallback(&self) -> Option<&RoleProvider> {
-        self.get_provider(ProviderRole::Fallback)
-            .or_else(|| self.get_provider(ProviderRole::DefaultCoding))
-    }
-
-    pub fn get_embedding_provider(&self) -> Option<&RoleProvider> {
-        self.get_provider(ProviderRole::RagEmbedding)
-            .or_else(|| self.get_provider(ProviderRole::RagEmbeddingCloud))
-            .or_else(|| self.get_provider(ProviderRole::Fallback))
-    }
 }
 
 #[cfg(test)]
@@ -243,9 +232,10 @@ mod tests {
     }
 
     #[test]
-    fn default_router_has_no_fallback_by_default() {
+    fn default_router_has_rag_embedding_by_default() {
         let router = ModelRouter::default();
-        let fallback = router.get_fallback();
-        assert!(fallback.is_none());
+        let rag = router.get_provider(ProviderRole::RagEmbedding);
+        assert!(rag.is_some());
+        assert_eq!(rag.unwrap().provider, ModelProvider::Ollama);
     }
 }

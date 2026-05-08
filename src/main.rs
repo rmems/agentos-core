@@ -94,15 +94,32 @@ async fn main() -> Result<()> {
             println!("{}", install::print_config(&install_ctx, client)?);
         }
         Commands::Route { provider } => {
-            if let Some(p) = provider {
-                println!("provider={}", p);
-                let _ = ModelRouter::from_env();
+            let router = if provider.is_some() {
+                ModelRouter::from_env().unwrap_or_default()
             } else {
-                let router = ModelRouter::default();
-                println!("# Role-based providers:");
-                println!("default_coding: {} (default)", router.roles.first().map(|r| r.provider.name()).unwrap_or("ollama"));
-                println!("fallback: {} (default)", router.get_fallback().map(|r| r.provider.name()).unwrap_or("ollama"));
-                println!("rag_embedding: {} (default)", router.get_embedding_provider().map(|r| r.provider.name()).unwrap_or("ollama"));
+                ModelRouter::default()
+            };
+
+            println!("# Role-based providers:");
+            for role in ProviderRole::all() {
+                let p = router.get_provider(role);
+                let status = if provider.is_some() && p.is_some() {
+                    "(from env)".to_string()
+                } else if p.is_some() {
+                    "(default)".to_string()
+                } else {
+                    "(not set)".to_string()
+                };
+
+                println!(
+                    "{:?}: {} {}",
+                    role,
+                    p.map(|r| r.provider.name()).unwrap_or("none"),
+                    status
+                );
+            }
+
+            if provider.is_none() {
                 println!("\n# Environment variables:");
                 for role in ProviderRole::all() {
                     println!("- {} (provider name)", role.to_env_key());
