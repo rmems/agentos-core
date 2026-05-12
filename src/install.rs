@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
 use dirs::home_dir;
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 const SERVER_KEY: &str = "agentos-core";
 
@@ -358,6 +358,15 @@ fn codex_has_server() -> Result<bool> {
     Ok(String::from_utf8_lossy(&output.stdout).contains(SERVER_KEY))
 }
 
+fn ollama_api_tags_url(ollama_host: &str) -> String {
+    let base = match ollama_host.trim() {
+        "" => "http://127.0.0.1:11434".to_string(),
+        s if s.starts_with("http://") || s.starts_with("https://") => s.to_string(),
+        s => format!("http://{s}"),
+    };
+    format!("{}/api/tags", base.trim_end_matches('/'))
+}
+
 pub fn doctor_checks() -> Vec<(String, String)> {
     let mut checks = Vec::new();
 
@@ -381,25 +390,30 @@ pub fn doctor_checks() -> Vec<(String, String)> {
         ])
         .output()
     {
-        let status = if output.status.success() { "ok" } else { "unreachable" };
+        let status = if output.status.success() {
+            "ok"
+        } else {
+            "unreachable"
+        };
         checks.push(("qdrant".to_string(), status.to_string()));
     } else {
         checks.push(("qdrant".to_string(), "unreachable".to_string()));
     }
 
+    let ollama_host_raw = std::env::var("OLLAMA_HOST").unwrap_or_default();
+    let ollama_tags_url = ollama_api_tags_url(&ollama_host_raw);
+
     // Check Ollama
     if curl_missing {
         checks.push(("ollama".to_string(), "curl missing".to_string()));
     } else if let Ok(output) = Command::new("curl")
-        .args([
-            "-sS",
-            "--fail",
-            "--connect-timeout",
-            "2",
-            "--max-time",
-            "4",
-            "http://127.0.0.1:11434/api/tags",
-        ])
+        .arg("-sS")
+        .arg("--fail")
+        .arg("--connect-timeout")
+        .arg("2")
+        .arg("--max-time")
+        .arg("4")
+        .arg(&ollama_tags_url)
         .output()
     {
         let status = if output.status.success() {
@@ -437,13 +451,12 @@ pub fn doctor_checks() -> Vec<(String, String)> {
     }
 
     // Check Ollama host
-    let ollama_host = std::env::var("OLLAMA_HOST").unwrap_or_default();
     checks.push((
         "OLLAMA_HOST".to_string(),
-        if ollama_host.is_empty() {
+        if ollama_host_raw.is_empty() {
             "default".to_string()
         } else {
-            ollama_host
+            ollama_host_raw
         },
     ));
 
