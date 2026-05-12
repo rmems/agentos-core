@@ -414,7 +414,13 @@ pub fn doctor_checks() -> Vec<(String, String)> {
     let ollama_health = if std::env::var("OLLAMA_ENDPOINT")
         .ok()
         .or_else(|| std::env::var("OLLAMA_HOST").ok())
-        .and_then(|value| if value.trim().is_empty() { None } else { Some(()) })
+        .and_then(|value| {
+            if value.trim().is_empty() {
+                None
+            } else {
+                Some(())
+            }
+        })
         .is_some()
     {
         ollama_endpoint.clone()
