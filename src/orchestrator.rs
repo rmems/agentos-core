@@ -691,10 +691,44 @@ pub(crate) fn resolve_ollama_endpoint() -> String {
 
 fn normalize_ollama_endpoint(ollama_host_or_url: &str) -> String {
     let trimmed = ollama_host_or_url.trim();
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    if trimmed.is_empty() {
+        return DEFAULT_OLLAMA_ENDPOINT.to_string();
+    }
+
+    // Ensure scheme
+    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         trimmed.to_string()
     } else {
         format!("http://{trimmed}")
+    };
+
+    // Drop trailing slash for easier port detection
+    let without_trailing = with_scheme.trim_end_matches('/');
+
+    // Insert default port 11434 when none is specified
+    if let Some((scheme, rest)) = without_trailing.split_once("://") {
+        let mut parts = rest.splitn(2, '/');
+        let host_port = parts.next().unwrap_or_default();
+        let path = parts.next().map(|p| format!("/{p}")).unwrap_or_default();
+
+        let has_port = if let Some(stripped) = host_port.strip_prefix('[') {
+            stripped.contains(":]")
+        } else {
+            host_port
+                .rsplit_once(':')
+                .map(|(_, port)| port.chars().all(|c| c.is_ascii_digit()))
+                .unwrap_or(false)
+        };
+
+        let host_port = if has_port {
+            host_port.to_string()
+        } else {
+            format!("{host_port}:11434")
+        };
+
+        format!("{scheme}://{host_port}{path}")
+    } else {
+        without_trailing.to_string()
     }
 }
 
