@@ -683,9 +683,19 @@ pub(crate) fn resolved_vector_db_config() -> VectorDbConfig {
 }
 
 pub(crate) fn resolve_ollama_endpoint() -> String {
-    env_string("OLLAMA_ENDPOINT")
+    let raw = env_string("OLLAMA_ENDPOINT")
         .or_else(|| env_string("OLLAMA_HOST"))
-        .unwrap_or_else(|| DEFAULT_OLLAMA_ENDPOINT.to_string())
+        .unwrap_or_else(|| DEFAULT_OLLAMA_ENDPOINT.to_string());
+    normalize_ollama_endpoint(&raw)
+}
+
+fn normalize_ollama_endpoint(ollama_host_or_url: &str) -> String {
+    let trimmed = ollama_host_or_url.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{trimmed}")
+    }
 }
 
 pub(crate) fn manifest_chunk_count(raw: &str) -> Result<usize> {

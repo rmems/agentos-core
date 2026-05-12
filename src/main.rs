@@ -149,7 +149,7 @@ async fn main() -> Result<()> {
         }
         Commands::Index => {
             let rag = crate::rag::load_rag_config()?;
-            let db = crate::rag::load_vector_db_config()?;
+            let db = crate::orchestrator::resolved_vector_db_config();
             println!("Indexing repositories into Qdrant...");
             let report = crate::rag::index_default_repos(&rag, &db).await?;
             println!("Indexing complete!");

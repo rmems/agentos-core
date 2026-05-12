@@ -383,15 +383,6 @@ fn curl_health(name: &str, url: &str, curl_missing: bool) -> (String, String) {
     (name.to_string(), "unreachable".to_string())
 }
 
-fn normalize_ollama_endpoint(ollama_host_or_url: &str) -> String {
-    let trimmed = ollama_host_or_url.trim();
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        trimmed.to_string()
-    } else {
-        format!("http://{trimmed}")
-    }
-}
-
 pub fn doctor_checks() -> Vec<(String, String)> {
     let mut checks = Vec::new();
 
@@ -410,7 +401,6 @@ pub fn doctor_checks() -> Vec<(String, String)> {
     ));
 
     let ollama_endpoint = crate::orchestrator::resolve_ollama_endpoint();
-    let ollama_endpoint = normalize_ollama_endpoint(&ollama_endpoint);
     let ollama_health = if std::env::var("OLLAMA_ENDPOINT")
         .ok()
         .or_else(|| std::env::var("OLLAMA_HOST").ok())

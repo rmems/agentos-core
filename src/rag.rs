@@ -145,9 +145,15 @@ pub async fn index_default_repos(cfg: &RagConfig, db: &VectorDbConfig) -> Result
     let mut skipped_roots = Vec::new();
     let mut chunks_indexed = 0usize;
     let ollama = ollama_config_from_rag(cfg);
-    let repo_index = load_repo_index_config()?;
+    let roots = match std::env::var_os("RAG_REPO_ROOTS") {
+        None | Some(ref os) if os.is_empty() => load_repo_index_config()?.roots,
+        Some(os) => std::env::split_paths(&os)
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_string_lossy().to_string())
+            .collect(),
+    };
 
-    for root in repo_index.roots {
+    for root in roots {
         let root_path = PathBuf::from(&root);
         if !root_path.is_dir() {
             skipped_roots.push(root);
