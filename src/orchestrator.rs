@@ -12,9 +12,12 @@ use crate::rag::{VectorDbConfig, load_vector_db_config};
 use crate::tools::ollama::{OllamaConfig, ollama_embed};
 use crate::tools::qdrant::{QdrantVectorRecord, qdrant_delete_vectors, qdrant_upsert_vectors};
 
+#[cfg(unix)]
 const SYSTEM_MANIFEST_PATH: &str = "/etc/agentos/configs/rag_index_manifest.json";
 const DEFAULT_COLLECTION: &str = "repos";
 const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text:latest";
+const DEFAULT_QDRANT_HOST: &str = "http://127.0.0.1:6333";
+const DEFAULT_OLLAMA_ENDPOINT: &str = "http://127.0.0.1:11434";
 const MAX_FILE_BYTES: u64 = 2_000_000;
 
 #[derive(Debug, Clone)]
@@ -144,23 +147,13 @@ struct ChunkMetadata {
 
 impl Orchestrator {
     pub fn from_env() -> Result<Self> {
-        let mut vector_db = load_vector_db_config().unwrap_or_else(|_| VectorDbConfig {
-            provider: "qdrant".to_string(),
-            host: "http://127.0.0.1:6333".to_string(),
-            collection: DEFAULT_COLLECTION.to_string(),
-            embedding_dim: 768,
-            distance: "Cosine".to_string(),
-        });
-        let collection = env_string("RAG_COLLECTION")
-            .or_else(|| env_string("COLLECTION_NAME"))
-            .unwrap_or_else(|| vector_db.collection.clone());
-        vector_db.collection = collection.clone();
+        let vector_db = resolved_vector_db_config();
+        let collection = vector_db.collection.clone();
 
         let embedding_model =
             env_string("EMBEDDING_MODEL").unwrap_or_else(|| DEFAULT_EMBEDDING_MODEL.to_string());
         let ollama = OllamaConfig {
-            endpoint: env_string("OLLAMA_ENDPOINT")
-                .unwrap_or_else(|| "http://127.0.0.1:11434".to_string()),
+            endpoint: resolve_ollama_endpoint(),
             embedding_model: embedding_model.clone(),
         };
 
@@ -170,7 +163,7 @@ impl Orchestrator {
             batch_size: env_usize("BATCH_SIZE", 128).max(1),
             chunk_tokens: env_usize("CHUNK_TOKENS", 800).max(1),
             chunk_overlap: env_f32("CHUNK_OVERLAP", 0.25).clamp(0.0, 0.95),
-            manifest_path: manifest_path_from_env(),
+            manifest_path: rag_index_manifest_path(),
             vector_db,
             ollama,
         })
@@ -673,6 +666,78 @@ impl Orchestrator {
     }
 }
 
+pub(crate) fn resolved_vector_db_config() -> VectorDbConfig {
+    let mut vector_db = load_vector_db_config().unwrap_or_else(|_| VectorDbConfig {
+        provider: "qdrant".to_string(),
+        host: DEFAULT_QDRANT_HOST.to_string(),
+        collection: DEFAULT_COLLECTION.to_string(),
+        embedding_dim: 768,
+        distance: "Cosine".to_string(),
+    });
+
+    vector_db.collection = env_string("RAG_COLLECTION")
+        .or_else(|| env_string("COLLECTION_NAME"))
+        .unwrap_or_else(|| vector_db.collection.clone());
+
+    vector_db
+}
+
+pub(crate) fn resolve_ollama_endpoint() -> String {
+    let raw = env_string("OLLAMA_ENDPOINT")
+        .or_else(|| env_string("OLLAMA_HOST"))
+        .unwrap_or_else(|| DEFAULT_OLLAMA_ENDPOINT.to_string());
+    normalize_ollama_endpoint(&raw)
+}
+
+fn normalize_ollama_endpoint(ollama_host_or_url: &str) -> String {
+    let trimmed = ollama_host_or_url.trim();
+    if trimmed.is_empty() {
+        return DEFAULT_OLLAMA_ENDPOINT.to_string();
+    }
+
+    // Ensure scheme
+    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{trimmed}")
+    };
+
+    // Drop trailing slash for easier port detection
+    let without_trailing = with_scheme.trim_end_matches('/');
+
+    // Insert default port 11434 when none is specified
+    if let Some((scheme, rest)) = without_trailing.split_once("://") {
+        let mut parts = rest.splitn(2, '/');
+        let host_port = parts.next().unwrap_or_default();
+        let path = parts.next().map(|p| format!("/{p}")).unwrap_or_default();
+
+        let has_port = if let Some(stripped) = host_port.strip_prefix('[') {
+            stripped.contains(":]")
+        } else {
+            host_port
+                .rsplit_once(':')
+                .map(|(_, port)| port.chars().all(|c| c.is_ascii_digit()))
+                .unwrap_or(false)
+        };
+
+        let host_port = if has_port {
+            host_port.to_string()
+        } else {
+            format!("{host_port}:11434")
+        };
+
+        format!("{scheme}://{host_port}{path}")
+    } else {
+        without_trailing.to_string()
+    }
+}
+
+pub(crate) fn manifest_chunk_count(raw: &str) -> Result<usize> {
+    let manifest: IndexManifest =
+        serde_json::from_str(raw).with_context(|| "failed to parse index manifest JSON")?;
+    Ok(manifest.chunks.len())
+}
+
 fn merge_summary(target: &mut OperationSummary, other: OperationSummary) {
     target.processed_chunks += other.processed_chunks;
     target.upserted_ids.extend(other.upserted_ids);
@@ -930,13 +995,10 @@ fn resolve_repo_root(repo: &str) -> Result<PathBuf> {
 }
 
 fn repo_roots_from_env() -> Vec<PathBuf> {
-    std::env::var("RAG_REPO_ROOTS")
-        .ok()
+    std::env::var_os("RAG_REPO_ROOTS")
         .map(|value| {
-            value
-                .split(':')
-                .filter(|part| !part.trim().is_empty())
-                .map(PathBuf::from)
+            std::env::split_paths(&value)
+                .filter(|p| !p.as_os_str().is_empty())
                 .collect::<Vec<_>>()
         })
         .filter(|roots| !roots.is_empty())
@@ -1014,7 +1076,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn manifest_path_from_env() -> PathBuf {
+pub(crate) fn rag_index_manifest_path() -> PathBuf {
     env_string("AGENTOS_RAG_INDEX_MANIFEST")
         .or_else(|| env_string("RAG_INDEX_MANIFEST"))
         .map(PathBuf::from)
@@ -1022,13 +1084,16 @@ fn manifest_path_from_env() -> PathBuf {
 }
 
 fn default_manifest_path() -> PathBuf {
-    let system_path = PathBuf::from(SYSTEM_MANIFEST_PATH);
-    if system_path
-        .parent()
-        .map(|parent| parent.is_dir() && is_writable_dir(parent))
-        .unwrap_or(false)
+    #[cfg(unix)]
     {
-        return system_path;
+        let system_path = PathBuf::from(SYSTEM_MANIFEST_PATH);
+        if system_path
+            .parent()
+            .map(|parent| parent.is_dir() && is_writable_dir(parent))
+            .unwrap_or(false)
+        {
+            return system_path;
+        }
     }
     dirs::data_local_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
@@ -1048,7 +1113,7 @@ fn is_writable_dir(path: &Path) -> bool {
     }
 }
 
-fn env_string(name: &str) -> Option<String> {
+pub(crate) fn env_string(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .filter(|value| !value.trim().is_empty())

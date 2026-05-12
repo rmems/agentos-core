@@ -19,7 +19,6 @@ pub enum ClientTarget {
     Antigravity,
     Jetbrains,
 }
-
 #[derive(Debug, Clone)]
 pub struct InstallContext {
     pub repo_home: PathBuf,
@@ -227,6 +226,11 @@ pub fn doctor(ctx: &InstallContext) -> Result<String> {
     lines.push(format!("repo_home={}", ctx.repo_home.display()));
     lines.push(format!("launcher={}", ctx.launcher_path().display()));
 
+    // Add infrastructure checks
+    for (name, status) in doctor_checks() {
+        lines.push(format!("{name}: {status}"));
+    }
+
     let checks = [
         ("cursor", home_path(".cursor/mcp.json")?),
         ("vscode", home_path(".config/Code/User/mcp.json")?),
@@ -351,4 +355,155 @@ fn codex_has_server() -> Result<bool> {
         .output()
         .context("failed to run codex mcp list")?;
     Ok(String::from_utf8_lossy(&output.stdout).contains(SERVER_KEY))
+}
+
+fn curl_health(name: &str, url: &str, curl_missing: bool) -> (String, String) {
+    if curl_missing {
+        return (name.to_string(), "curl missing".to_string());
+    }
+
+    if let Ok(output) = Command::new("curl")
+        .args([
+            "-sS",
+            "--fail",
+            "--connect-timeout",
+            "2",
+            "--max-time",
+            "4",
+            url,
+        ])
+        .output()
+    {
+        if output.status.success() {
+            return (name.to_string(), "ok".to_string());
+        }
+        return (name.to_string(), "unreachable".to_string());
+    }
+
+    (name.to_string(), "unreachable".to_string())
+}
+
+pub fn doctor_checks() -> Vec<(String, String)> {
+    let mut checks = Vec::new();
+
+    let curl_missing = match Command::new("curl").arg("--version").output() {
+        Ok(_) => false,
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+    };
+
+    // Check Qdrant
+    let vector_db = crate::orchestrator::resolved_vector_db_config();
+    let qdrant_host = vector_db.host.trim_end_matches('/').to_string();
+    checks.push(curl_health(
+        "qdrant",
+        &format!("{}/readyz", qdrant_host),
+        curl_missing,
+    ));
+
+    let ollama_endpoint = crate::orchestrator::resolve_ollama_endpoint();
+    let ollama_health = if std::env::var("OLLAMA_ENDPOINT")
+        .ok()
+        .or_else(|| std::env::var("OLLAMA_HOST").ok())
+        .and_then(|value| {
+            if value.trim().is_empty() {
+                None
+            } else {
+                Some(())
+            }
+        })
+        .is_some()
+    {
+        ollama_endpoint.clone()
+    } else {
+        "default".to_string()
+    };
+
+    // Check Ollama
+    checks.push(curl_health(
+        "ollama",
+        &format!("{}/api/tags", ollama_endpoint.trim_end_matches('/')),
+        curl_missing,
+    ));
+
+    // Check all cloud provider API keys
+    let provider_vars = [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+        "NVIDIA_NIM_API_KEY",
+        "OLLAMA_API_KEY",
+    ];
+    for var in provider_vars {
+        let status = if std::env::var(var)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .is_some()
+        {
+            "configured"
+        } else {
+            "not set"
+        };
+        checks.push((var.to_string(), status.to_string()));
+    }
+
+    // Check resolved Ollama endpoint
+    checks.push(("OLLAMA_ENDPOINT".to_string(), ollama_health));
+
+    // Check RAG_REPO_ROOTS
+    match std::env::var_os("RAG_REPO_ROOTS") {
+        None => {
+            checks.push(("RAG_REPO_ROOTS".to_string(), "not set".to_string()));
+        }
+        Some(value) if value.is_empty() => {
+            checks.push(("RAG_REPO_ROOTS".to_string(), "not set".to_string()));
+        }
+        Some(value) => {
+            let roots: Vec<std::path::PathBuf> = std::env::split_paths(&value)
+                .filter(|p| !p.as_os_str().is_empty())
+                .collect();
+            let valid_count = roots.iter().filter(|root| root.is_dir()).count();
+            checks.push((
+                "RAG_REPO_ROOTS".to_string(),
+                format!("{} paths ({} valid)", roots.len(), valid_count),
+            ));
+        }
+    }
+
+    // Check RAG_COLLECTION
+    checks.push(("RAG_COLLECTION".to_string(), vector_db.collection));
+
+    // Check index manifest (same resolution as runtime orchestrator)
+    let manifest_path = crate::orchestrator::rag_index_manifest_path();
+
+    let manifest_exists = manifest_path.exists();
+    if manifest_exists {
+        if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
+            match crate::orchestrator::manifest_chunk_count(&raw) {
+                Ok(chunk_count) => {
+                    checks.push((
+                        "index_manifest".to_string(),
+                        format!("exists ({} chunks)", chunk_count),
+                    ));
+                }
+                Err(_) => {
+                    checks.push(("index_manifest".to_string(), "exists (invalid)".to_string()));
+                }
+            }
+        } else {
+            checks.push((
+                "index_manifest".to_string(),
+                "exists (unreadable)".to_string(),
+            ));
+        }
+    } else {
+        checks.push((
+            "index_manifest".to_string(),
+            format!("not found ({})", manifest_path.display()),
+        ));
+    }
+
+    checks
 }
