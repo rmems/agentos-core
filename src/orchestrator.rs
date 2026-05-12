@@ -1049,7 +1049,7 @@ fn is_writable_dir(path: &Path) -> bool {
     }
 }
 
-fn env_string(name: &str) -> Option<String> {
+pub(crate) fn env_string(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
         .filter(|value| !value.trim().is_empty())

@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use dirs::home_dir;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 const SERVER_KEY: &str = "agentos-core";
 
@@ -480,10 +480,10 @@ pub fn doctor_checks() -> Vec<(String, String)> {
         }
     }
 
-    // Check RAG_COLLECTION
-    let rag_collection = std::env::var("RAG_COLLECTION")
-        .or_else(|_| std::env::var("COLLECTION_NAME"))
-        .unwrap_or_else(|_| "repos".to_string());
+    // Check RAG_COLLECTION (same resolution as runtime: trim, treat empty as unset)
+    let rag_collection = crate::orchestrator::env_string("RAG_COLLECTION")
+        .or_else(|| crate::orchestrator::env_string("COLLECTION_NAME"))
+        .unwrap_or_else(|| "repos".to_string());
     checks.push(("RAG_COLLECTION".to_string(), rag_collection));
 
     // Check index manifest (same resolution as runtime orchestrator)
