@@ -12,6 +12,7 @@ use crate::rag::{VectorDbConfig, load_vector_db_config};
 use crate::tools::ollama::{OllamaConfig, ollama_embed};
 use crate::tools::qdrant::{QdrantVectorRecord, qdrant_delete_vectors, qdrant_upsert_vectors};
 
+#[cfg(unix)]
 const SYSTEM_MANIFEST_PATH: &str = "/etc/agentos/configs/rag_index_manifest.json";
 const DEFAULT_COLLECTION: &str = "repos";
 const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text:latest";
@@ -930,13 +931,10 @@ fn resolve_repo_root(repo: &str) -> Result<PathBuf> {
 }
 
 fn repo_roots_from_env() -> Vec<PathBuf> {
-    std::env::var("RAG_REPO_ROOTS")
-        .ok()
+    std::env::var_os("RAG_REPO_ROOTS")
         .map(|value| {
-            value
-                .split(':')
-                .filter(|part| !part.trim().is_empty())
-                .map(PathBuf::from)
+            std::env::split_paths(&value)
+                .filter(|p| !p.as_os_str().is_empty())
                 .collect::<Vec<_>>()
         })
         .filter(|roots| !roots.is_empty())
@@ -1022,13 +1020,16 @@ fn manifest_path_from_env() -> PathBuf {
 }
 
 fn default_manifest_path() -> PathBuf {
-    let system_path = PathBuf::from(SYSTEM_MANIFEST_PATH);
-    if system_path
-        .parent()
-        .map(|parent| parent.is_dir() && is_writable_dir(parent))
-        .unwrap_or(false)
+    #[cfg(unix)]
     {
-        return system_path;
+        let system_path = PathBuf::from(SYSTEM_MANIFEST_PATH);
+        if system_path
+            .parent()
+            .map(|parent| parent.is_dir() && is_writable_dir(parent))
+            .unwrap_or(false)
+        {
+            return system_path;
+        }
     }
     dirs::data_local_dir()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))

@@ -43,8 +43,8 @@ enum Commands {
         client: ClientTarget,
     },
     Route {
-        #[arg(long)]
-        provider: Option<String>,
+        #[arg(long, default_value_t = false)]
+        env: bool,
     },
     Install {
         #[arg(long, value_delimiter = ',')]
@@ -94,33 +94,36 @@ async fn main() -> Result<()> {
         Commands::PrintConfig { client } => {
             println!("{}", install::print_config(&install_ctx, client)?);
         }
-        Commands::Route { provider } => {
-            let router = if provider.is_some() {
-                ModelRouter::from_env().unwrap_or_default()
+        Commands::Route { env } => {
+            let base = ModelRouter::default();
+            let overrides = if env {
+                ModelRouter::from_env()?
             } else {
-                ModelRouter::default()
+                ModelRouter { roles: vec![] }
             };
 
             println!("# Role-based providers:");
             for role in ProviderRole::all() {
-                let p = router.get_provider(role);
-                let status = if provider.is_some() && p.is_some() {
-                    "(from env)".to_string()
-                } else if p.is_some() {
-                    "(default)".to_string()
+                let override_p = overrides.get_provider(role);
+                let base_p = base.get_provider(role);
+                let chosen = override_p.or(base_p);
+                let status = if override_p.is_some() {
+                    "(from env)"
+                } else if base_p.is_some() {
+                    "(default)"
                 } else {
-                    "(not set)".to_string()
+                    "(not set)"
                 };
 
                 println!(
                     "{:?}: {} {}",
                     role,
-                    p.map(|r| r.provider.name()).unwrap_or("none"),
+                    chosen.map(|r| r.provider.name()).unwrap_or("none"),
                     status
                 );
             }
 
-            if provider.is_none() {
+            if !env {
                 println!("\n# Environment variables:");
                 for role in ProviderRole::all() {
                     println!("- {} (provider name)", role.to_env_key());

@@ -1,6 +1,6 @@
 use std::env;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -56,8 +56,17 @@ impl ModelProvider {
         }
     }
 
-    pub fn requires_api_key(&self) -> bool {
-        !matches!(self, Self::Ollama)
+    pub fn api_key_env_var(&self) -> Option<&'static str> {
+        match self {
+            Self::Openai => Some("OPENAI_API_KEY"),
+            Self::Anthropic => Some("ANTHROPIC_API_KEY"),
+            Self::GoogleAiStudio | Self::Google => Some("GEMINI_API_KEY"),
+            Self::Azure => Some("AZURE_OPENAI_API_KEY"),
+            Self::Openrouter => Some("OPENROUTER_API_KEY"),
+            Self::NvidiaNim => Some("NVIDIA_NIM_API_KEY"),
+            Self::OllamaCloud => Some("OLLAMA_API_KEY"),
+            Self::Ollama | Self::Codex | Self::OpenCode => None,
+        }
     }
 }
 
@@ -74,7 +83,6 @@ pub enum ProviderRole {
 }
 
 impl ProviderRole {
-
     pub fn to_env_key(&self) -> String {
         match self {
             Self::DefaultCoding => "AGENTOS_ROLE_DEFAULT_CODING".to_string(),
@@ -137,13 +145,11 @@ impl Default for ModelRouter {
         }
 
         Self {
-            roles: vec![
-                RoleProvider {
-                    role: ProviderRole::RagEmbedding,
-                    provider: ModelProvider::Ollama,
-                    model: Some("nomic-embed-text:latest".to_string()),
-                },
-            ],
+            roles: vec![RoleProvider {
+                role: ProviderRole::RagEmbedding,
+                provider: ModelProvider::Ollama,
+                model: Some("nomic-embed-text:latest".to_string()),
+            }],
         }
     }
 }
@@ -166,52 +172,36 @@ impl ModelRouter {
         let all_roles = ProviderRole::all();
 
         for role in all_roles {
-            let provider_str = env::var(role.to_env_key()).ok();
-            let provider = provider_str
-                .as_ref()
-                .and_then(|p| ModelProvider::from_str(p));
+            let key = role.to_env_key();
+            let Some(provider_str) = env::var(&key).ok() else {
+                continue;
+            };
 
-            if let Some(p) = provider {
-                if p.requires_api_key() {
-                    let (key_var, provider_name) = match p {
-                        ModelProvider::Openai => ("OPENAI_API_KEY", "openai"),
-                        ModelProvider::Anthropic => ("ANTHROPIC_API_KEY", "anthropic"),
-                        ModelProvider::GoogleAiStudio | ModelProvider::Google => {
-                            ("GOOGLE_API_KEY", "google")
-                        }
-                        ModelProvider::Azure => ("AZURE_OPENAI_API_KEY", "azure"),
-                        ModelProvider::Openrouter => ("OPENROUTER_API_KEY", "openrouter"),
-                        ModelProvider::NvidiaNim => ("NVIDIA_NIM_API_KEY", "nvidia-nim"),
-                        ModelProvider::OllamaCloud => ("OLLAMA_API_KEY", "ollama-cloud"),
-                        _ => ("", ""),
-                    };
-                    if !key_var.is_empty() && env::var(key_var).is_err() {
-                        bail!(
-                            "{} is required for {} provider in role {} but not set",
-                            key_var,
-                            provider_name,
-                            role.name()
-                        );
-                    }
+            let Some(provider) = ModelProvider::from_str(&provider_str) else {
+                bail!("unknown provider '{}' for {}", provider_str, key);
+            };
+
+            if let Some(key_var) = provider.api_key_env_var() {
+                if env::var(key_var).is_err() {
+                    bail!(
+                        "{} is required for {} provider in role {} but not set",
+                        key_var,
+                        provider.name(),
+                        role.name()
+                    );
                 }
-
-                let model = env::var(format!("{}_MODEL", role.to_env_key())).ok();
-                roles.push(RoleProvider {
-                    role,
-                    provider: p,
-                    model,
-                });
             }
+
+            let model = env::var(format!("{key}_MODEL")).ok();
+            roles.push(RoleProvider {
+                role,
+                provider,
+                model,
+            });
         }
 
-        if roles.is_empty() {
-            let default_router = Self::default();
-            return Ok(default_router);
-        }
-
-        Ok(Self {
-            roles,
-        })
+        // Return only explicit overrides. Callers can layer these on top of defaults.
+        Ok(Self { roles })
     }
 
     pub fn get_provider(&self, role: ProviderRole) -> Option<&RoleProvider> {
@@ -222,20 +212,68 @@ impl ModelRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
 
-    #[test]
-    fn model_provider_from_str_handles_case_insensitive() {
-        assert_eq!(ModelProvider::from_str("OPENAI"), Some(ModelProvider::Openai));
-        assert_eq!(ModelProvider::from_str("openai"), Some(ModelProvider::Openai));
-        assert_eq!(ModelProvider::from_str("OpenAI"), Some(ModelProvider::Openai));
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn with_env_lock<T>(f: impl FnOnce() -> T) -> T {
+        let lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().expect("env lock poisoned");
+        f()
+    }
+
+    fn clear_role_env() {
+        for role in ProviderRole::all() {
+            let key = role.to_env_key();
+            unsafe {
+                std::env::remove_var(&key);
+                std::env::remove_var(format!("{key}_MODEL"));
+            }
+        }
+        for key in [
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "GEMINI_API_KEY",
+            "AZURE_OPENAI_API_KEY",
+            "OPENROUTER_API_KEY",
+            "NVIDIA_NIM_API_KEY",
+            "OLLAMA_API_KEY",
+        ] {
+            unsafe {
+                std::env::remove_var(key);
+            }
+        }
     }
 
     #[test]
-    fn model_provider_requires_api_key() {
-        assert!(!ModelProvider::Ollama.requires_api_key());
-        assert!(ModelProvider::Openai.requires_api_key());
-        assert!(ModelProvider::Anthropic.requires_api_key());
-        assert!(ModelProvider::Openrouter.requires_api_key());
+    fn model_provider_from_str_handles_case_insensitive() {
+        assert_eq!(
+            ModelProvider::from_str("OPENAI"),
+            Some(ModelProvider::Openai)
+        );
+        assert_eq!(
+            ModelProvider::from_str("openai"),
+            Some(ModelProvider::Openai)
+        );
+        assert_eq!(
+            ModelProvider::from_str("OpenAI"),
+            Some(ModelProvider::Openai)
+        );
+    }
+
+    #[test]
+    fn model_provider_api_key_env_vars_are_explicit() {
+        assert_eq!(ModelProvider::Ollama.api_key_env_var(), None);
+        assert_eq!(ModelProvider::Codex.api_key_env_var(), None);
+        assert_eq!(ModelProvider::OpenCode.api_key_env_var(), None);
+        assert_eq!(
+            ModelProvider::Openai.api_key_env_var(),
+            Some("OPENAI_API_KEY")
+        );
+        assert_eq!(
+            ModelProvider::GoogleAiStudio.api_key_env_var(),
+            Some("GEMINI_API_KEY")
+        );
     }
 
     #[test]
@@ -264,5 +302,52 @@ mod tests {
         let rag = router.get_provider(ProviderRole::RagEmbedding);
         assert!(rag.is_some());
         assert_eq!(rag.unwrap().provider, ModelProvider::Ollama);
+    }
+
+    #[test]
+    fn env_parsing_unknown_provider_errors() {
+        with_env_lock(|| {
+            clear_role_env();
+            unsafe {
+                std::env::set_var("AGENTOS_ROLE_DEFAULT_CODING", "definitely-not-a-provider");
+            }
+            let err = ModelRouter::from_env().unwrap_err().to_string();
+            assert!(err.contains("unknown provider"), "{err}");
+        });
+    }
+
+    #[test]
+    fn env_parsing_missing_key_errors_for_keyed_provider() {
+        with_env_lock(|| {
+            clear_role_env();
+            unsafe {
+                std::env::set_var("AGENTOS_ROLE_DEFAULT_CODING", "openai");
+            }
+            let err = ModelRouter::from_env().unwrap_err().to_string();
+            assert!(err.contains("OPENAI_API_KEY"), "{err}");
+        });
+    }
+
+    #[test]
+    fn env_parsing_valid_provider_with_key_yields_override() {
+        with_env_lock(|| {
+            clear_role_env();
+            unsafe {
+                std::env::set_var("AGENTOS_ROLE_DEFAULT_CODING", "openai");
+                std::env::set_var("OPENAI_API_KEY", "test");
+            }
+            let router = ModelRouter::from_env().unwrap();
+            let rp = router.get_provider(ProviderRole::DefaultCoding).unwrap();
+            assert_eq!(rp.provider, ModelProvider::Openai);
+        });
+    }
+
+    #[test]
+    fn env_parsing_no_role_vars_returns_empty_overrides() {
+        with_env_lock(|| {
+            clear_role_env();
+            let router = ModelRouter::from_env().unwrap();
+            assert!(router.roles.is_empty());
+        });
     }
 }

@@ -361,9 +361,24 @@ fn codex_has_server() -> Result<bool> {
 pub fn doctor_checks() -> Vec<(String, String)> {
     let mut checks = Vec::new();
 
+    let curl_missing = match Command::new("curl").arg("--version").output() {
+        Ok(_) => false,
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+    };
+
     // Check Qdrant
-    if let Ok(output) = Command::new("curl")
-        .args(["-s", "http://127.0.0.1:6333/readyz"])
+    if curl_missing {
+        checks.push(("qdrant".to_string(), "curl missing".to_string()));
+    } else if let Ok(output) = Command::new("curl")
+        .args([
+            "-sS",
+            "--fail",
+            "--connect-timeout",
+            "2",
+            "--max-time",
+            "4",
+            "http://127.0.0.1:6333/readyz",
+        ])
         .output()
     {
         let status = if output.status.success() {
@@ -378,12 +393,22 @@ pub fn doctor_checks() -> Vec<(String, String)> {
         };
         checks.push(("qdrant".to_string(), status.to_string()));
     } else {
-        checks.push(("qdrant".to_string(), "not running".to_string()));
+        checks.push(("qdrant".to_string(), "unreachable".to_string()));
     }
 
     // Check Ollama
-    if let Ok(output) = Command::new("curl")
-        .args(["-s", "http://127.0.0.1:11434/api/tags"])
+    if curl_missing {
+        checks.push(("ollama".to_string(), "curl missing".to_string()));
+    } else if let Ok(output) = Command::new("curl")
+        .args([
+            "-sS",
+            "--fail",
+            "--connect-timeout",
+            "2",
+            "--max-time",
+            "4",
+            "http://127.0.0.1:11434/api/tags",
+        ])
         .output()
     {
         let status = if output.status.success() {
@@ -393,18 +418,16 @@ pub fn doctor_checks() -> Vec<(String, String)> {
         };
         checks.push(("ollama".to_string(), status.to_string()));
     } else {
-        checks.push(("ollama".to_string(), "not running".to_string()));
+        checks.push(("ollama".to_string(), "unreachable".to_string()));
     }
 
     // Check all cloud provider API keys
     let provider_vars = [
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
-        "GOOGLE_API_KEY",
-        "GOOGLE_AI_STUDIO_API_KEY",
+        "GEMINI_API_KEY",
         "AZURE_OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
-        "NVIDIA_API_KEY",
         "NVIDIA_NIM_API_KEY",
         "OLLAMA_API_KEY",
     ];
@@ -429,19 +452,23 @@ pub fn doctor_checks() -> Vec<(String, String)> {
     ));
 
     // Check RAG_REPO_ROOTS
-    let rag_roots = std::env::var("RAG_REPO_ROOTS").unwrap_or_default();
-    if rag_roots.is_empty() {
-        checks.push(("RAG_REPO_ROOTS".to_string(), "not set".to_string()));
-    } else {
-        let roots: Vec<&str> = rag_roots.split(':').filter(|s| !s.trim().is_empty()).collect();
-        let valid_count = roots
-            .iter()
-            .filter(|root| std::path::Path::new(*root).is_dir())
-            .count();
-        checks.push((
-            "RAG_REPO_ROOTS".to_string(),
-            format!("{} paths ({} valid)", roots.len(), valid_count),
-        ));
+    match std::env::var_os("RAG_REPO_ROOTS") {
+        None => {
+            checks.push(("RAG_REPO_ROOTS".to_string(), "not set".to_string()));
+        }
+        Some(value) if value.is_empty() => {
+            checks.push(("RAG_REPO_ROOTS".to_string(), "not set".to_string()));
+        }
+        Some(value) => {
+            let roots: Vec<std::path::PathBuf> = std::env::split_paths(&value)
+                .filter(|p| !p.as_os_str().is_empty())
+                .collect();
+            let valid_count = roots.iter().filter(|root| root.is_dir()).count();
+            checks.push((
+                "RAG_REPO_ROOTS".to_string(),
+                format!("{} paths ({} valid)", roots.len(), valid_count),
+            ));
+        }
     }
 
     // Check RAG_COLLECTION
@@ -454,9 +481,19 @@ pub fn doctor_checks() -> Vec<(String, String)> {
     let manifest_path = std::env::var("AGENTOS_RAG_INDEX_MANIFEST")
         .or_else(|_| std::env::var("RAG_INDEX_MANIFEST"))
         .unwrap_or_else(|_| {
-            let custom = dirs::data_local_dir()
-                .map(|d| d.join("agentos").join("rag_index_manifest.json").to_string_lossy().to_string());
-            custom.unwrap_or("/etc/agentos/configs/rag_index_manifest.json".to_string())
+            if let Some(dir) = dirs::data_local_dir() {
+                return dir
+                    .join("agentos")
+                    .join("rag_index_manifest.json")
+                    .to_string_lossy()
+                    .to_string();
+            }
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join("agentos")
+                .join("rag_index_manifest.json")
+                .to_string_lossy()
+                .to_string()
         });
 
     let manifest_exists = std::path::Path::new(&manifest_path).exists();
@@ -476,7 +513,10 @@ pub fn doctor_checks() -> Vec<(String, String)> {
                 checks.push(("index_manifest".to_string(), "exists (invalid)".to_string()));
             }
         } else {
-            checks.push(("index_manifest".to_string(), "exists (unreadable)".to_string()));
+            checks.push((
+                "index_manifest".to_string(),
+                "exists (unreadable)".to_string(),
+            ));
         }
     } else {
         checks.push((
