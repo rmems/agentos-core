@@ -477,26 +477,10 @@ pub fn doctor_checks() -> Vec<(String, String)> {
         .unwrap_or_else(|_| "repos".to_string());
     checks.push(("RAG_COLLECTION".to_string(), rag_collection));
 
-    // Check index manifest
-    let manifest_path = std::env::var("AGENTOS_RAG_INDEX_MANIFEST")
-        .or_else(|_| std::env::var("RAG_INDEX_MANIFEST"))
-        .unwrap_or_else(|_| {
-            if let Some(dir) = dirs::data_local_dir() {
-                return dir
-                    .join("agentos")
-                    .join("rag_index_manifest.json")
-                    .to_string_lossy()
-                    .to_string();
-            }
-            std::env::current_dir()
-                .unwrap_or_else(|_| PathBuf::from("."))
-                .join("agentos")
-                .join("rag_index_manifest.json")
-                .to_string_lossy()
-                .to_string()
-        });
+    // Check index manifest (same resolution as orchestrator)
+    let manifest_path = crate::orchestrator::rag_index_manifest_path();
 
-    let manifest_exists = std::path::Path::new(&manifest_path).exists();
+    let manifest_exists = manifest_path.exists();
     if manifest_exists {
         if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
             if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&raw) {

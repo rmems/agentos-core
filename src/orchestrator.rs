@@ -171,7 +171,7 @@ impl Orchestrator {
             batch_size: env_usize("BATCH_SIZE", 128).max(1),
             chunk_tokens: env_usize("CHUNK_TOKENS", 800).max(1),
             chunk_overlap: env_f32("CHUNK_OVERLAP", 0.25).clamp(0.0, 0.95),
-            manifest_path: manifest_path_from_env(),
+            manifest_path: rag_index_manifest_path(),
             vector_db,
             ollama,
         })
@@ -1012,7 +1012,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn manifest_path_from_env() -> PathBuf {
+pub(crate) fn rag_index_manifest_path() -> PathBuf {
     env_string("AGENTOS_RAG_INDEX_MANIFEST")
         .or_else(|| env_string("RAG_INDEX_MANIFEST"))
         .map(PathBuf::from)

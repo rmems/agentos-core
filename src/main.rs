@@ -70,30 +70,7 @@ async fn main() -> Result<()> {
     let _ = tracing::subscriber::set_global_default(subscriber);
 
     let cli = Cli::parse();
-    let repo_home = discover_repo_home()?;
-    let config = load_server_config(&repo_home)?;
-    let install_ctx = InstallContext {
-        repo_home: repo_home.clone(),
-    };
-
     match cli.command.unwrap_or(Commands::Serve) {
-        Commands::Serve => {
-            let server = DiscoveryServer::new(config);
-            server
-                .serve(rmcp::transport::stdio())
-                .await?
-                .waiting()
-                .await?;
-        }
-        Commands::ServeHttp { bind } => {
-            http::serve(&bind).await?;
-        }
-        Commands::Doctor => {
-            println!("{}", install::doctor(&install_ctx)?);
-        }
-        Commands::PrintConfig { client } => {
-            println!("{}", install::print_config(&install_ctx, client)?);
-        }
         Commands::Route { env } => {
             let base = ModelRouter::default();
             let overrides = if env {
@@ -131,16 +108,6 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Install { clients, dry_run } => {
-            for line in install::install(&install_ctx, &clients, dry_run)? {
-                println!("{line}");
-            }
-        }
-        Commands::Uninstall { clients, dry_run } => {
-            for line in install::uninstall(&install_ctx, &clients, dry_run)? {
-                println!("{line}");
-            }
-        }
         Commands::Index => {
             let rag = crate::rag::load_rag_config()?;
             let db = crate::rag::load_vector_db_config()?;
@@ -150,6 +117,44 @@ async fn main() -> Result<()> {
             println!("Indexed roots: {:?}", report.indexed_roots);
             println!("Skipped roots: {:?}", report.skipped_roots);
             println!("Chunks indexed: {}", report.chunks_indexed);
+        }
+        cmd => {
+            let repo_home = discover_repo_home()?;
+            let config = load_server_config(&repo_home)?;
+            let install_ctx = InstallContext {
+                repo_home: repo_home.clone(),
+            };
+
+            match cmd {
+                Commands::Serve => {
+                    let server = DiscoveryServer::new(config);
+                    server
+                        .serve(rmcp::transport::stdio())
+                        .await?
+                        .waiting()
+                        .await?;
+                }
+                Commands::ServeHttp { bind } => {
+                    http::serve(&bind).await?;
+                }
+                Commands::Doctor => {
+                    println!("{}", install::doctor(&install_ctx)?);
+                }
+                Commands::PrintConfig { client } => {
+                    println!("{}", install::print_config(&install_ctx, client)?);
+                }
+                Commands::Install { clients, dry_run } => {
+                    for line in install::install(&install_ctx, &clients, dry_run)? {
+                        println!("{line}");
+                    }
+                }
+                Commands::Uninstall { clients, dry_run } => {
+                    for line in install::uninstall(&install_ctx, &clients, dry_run)? {
+                        println!("{line}");
+                    }
+                }
+                Commands::Route { .. } | Commands::Index => unreachable!(),
+            }
         }
     }
 
