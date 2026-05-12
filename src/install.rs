@@ -19,7 +19,6 @@ pub enum ClientTarget {
     Antigravity,
     Jetbrains,
 }
-
 #[derive(Debug, Clone)]
 pub struct InstallContext {
     pub repo_home: PathBuf,
@@ -358,13 +357,39 @@ fn codex_has_server() -> Result<bool> {
     Ok(String::from_utf8_lossy(&output.stdout).contains(SERVER_KEY))
 }
 
-fn ollama_api_tags_url(ollama_host: &str) -> String {
-    let base = match ollama_host.trim() {
-        "" => "http://127.0.0.1:11434".to_string(),
-        s if s.starts_with("http://") || s.starts_with("https://") => s.to_string(),
-        s => format!("http://{s}"),
-    };
-    format!("{}/api/tags", base.trim_end_matches('/'))
+fn curl_health(name: &str, url: &str, curl_missing: bool) -> (String, String) {
+    if curl_missing {
+        return (name.to_string(), "curl missing".to_string());
+    }
+
+    if let Ok(output) = Command::new("curl")
+        .args([
+            "-sS",
+            "--fail",
+            "--connect-timeout",
+            "2",
+            "--max-time",
+            "4",
+            url,
+        ])
+        .output()
+    {
+        if output.status.success() {
+            return (name.to_string(), "ok".to_string());
+        }
+        return (name.to_string(), "unreachable".to_string());
+    }
+
+    (name.to_string(), "unreachable".to_string())
+}
+
+fn normalize_ollama_endpoint(ollama_host_or_url: &str) -> String {
+    let trimmed = ollama_host_or_url.trim();
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{trimmed}")
+    }
 }
 
 pub fn doctor_checks() -> Vec<(String, String)> {
@@ -376,55 +401,33 @@ pub fn doctor_checks() -> Vec<(String, String)> {
     };
 
     // Check Qdrant
-    if curl_missing {
-        checks.push(("qdrant".to_string(), "curl missing".to_string()));
-    } else if let Ok(output) = Command::new("curl")
-        .args([
-            "-sS",
-            "--fail",
-            "--connect-timeout",
-            "2",
-            "--max-time",
-            "4",
-            "http://127.0.0.1:6333/readyz",
-        ])
-        .output()
-    {
-        let status = if output.status.success() {
-            "ok"
-        } else {
-            "unreachable"
-        };
-        checks.push(("qdrant".to_string(), status.to_string()));
-    } else {
-        checks.push(("qdrant".to_string(), "unreachable".to_string()));
-    }
+    let vector_db = crate::orchestrator::resolved_vector_db_config();
+    let qdrant_host = vector_db.host.trim_end_matches('/').to_string();
+    checks.push(curl_health(
+        "qdrant",
+        &format!("{}/readyz", qdrant_host),
+        curl_missing,
+    ));
 
-    let ollama_host_raw = std::env::var("OLLAMA_HOST").unwrap_or_default();
-    let ollama_tags_url = ollama_api_tags_url(&ollama_host_raw);
+    let ollama_endpoint = crate::orchestrator::resolve_ollama_endpoint();
+    let ollama_endpoint = normalize_ollama_endpoint(&ollama_endpoint);
+    let ollama_health = if std::env::var("OLLAMA_ENDPOINT")
+        .ok()
+        .or_else(|| std::env::var("OLLAMA_HOST").ok())
+        .and_then(|value| if value.trim().is_empty() { None } else { Some(()) })
+        .is_some()
+    {
+        ollama_endpoint.clone()
+    } else {
+        "default".to_string()
+    };
 
     // Check Ollama
-    if curl_missing {
-        checks.push(("ollama".to_string(), "curl missing".to_string()));
-    } else if let Ok(output) = Command::new("curl")
-        .arg("-sS")
-        .arg("--fail")
-        .arg("--connect-timeout")
-        .arg("2")
-        .arg("--max-time")
-        .arg("4")
-        .arg(&ollama_tags_url)
-        .output()
-    {
-        let status = if output.status.success() {
-            "ok"
-        } else {
-            "unreachable"
-        };
-        checks.push(("ollama".to_string(), status.to_string()));
-    } else {
-        checks.push(("ollama".to_string(), "unreachable".to_string()));
-    }
+    checks.push(curl_health(
+        "ollama",
+        &format!("{}/api/tags", ollama_endpoint.trim_end_matches('/')),
+        curl_missing,
+    ));
 
     // Check all cloud provider API keys
     let provider_vars = [
@@ -450,15 +453,8 @@ pub fn doctor_checks() -> Vec<(String, String)> {
         checks.push((var.to_string(), status.to_string()));
     }
 
-    // Check Ollama host
-    checks.push((
-        "OLLAMA_HOST".to_string(),
-        if ollama_host_raw.is_empty() {
-            "default".to_string()
-        } else {
-            ollama_host_raw
-        },
-    ));
+    // Check resolved Ollama endpoint
+    checks.push(("OLLAMA_ENDPOINT".to_string(), ollama_health));
 
     // Check RAG_REPO_ROOTS
     match std::env::var_os("RAG_REPO_ROOTS") {
@@ -480,11 +476,8 @@ pub fn doctor_checks() -> Vec<(String, String)> {
         }
     }
 
-    // Check RAG_COLLECTION (same resolution as runtime: trim, treat empty as unset)
-    let rag_collection = crate::orchestrator::env_string("RAG_COLLECTION")
-        .or_else(|| crate::orchestrator::env_string("COLLECTION_NAME"))
-        .unwrap_or_else(|| "repos".to_string());
-    checks.push(("RAG_COLLECTION".to_string(), rag_collection));
+    // Check RAG_COLLECTION
+    checks.push(("RAG_COLLECTION".to_string(), vector_db.collection));
 
     // Check index manifest (same resolution as runtime orchestrator)
     let manifest_path = crate::orchestrator::rag_index_manifest_path();
@@ -492,18 +485,16 @@ pub fn doctor_checks() -> Vec<(String, String)> {
     let manifest_exists = manifest_path.exists();
     if manifest_exists {
         if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
-            if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&raw) {
-                let chunk_count = manifest
-                    .get("chunks")
-                    .and_then(|c| c.as_object())
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                checks.push((
-                    "index_manifest".to_string(),
-                    format!("exists ({} chunks)", chunk_count),
-                ));
-            } else {
-                checks.push(("index_manifest".to_string(), "exists (invalid)".to_string()));
+            match crate::orchestrator::manifest_chunk_count(&raw) {
+                Ok(chunk_count) => {
+                    checks.push((
+                        "index_manifest".to_string(),
+                        format!("exists ({} chunks)", chunk_count),
+                    ));
+                }
+                Err(_) => {
+                    checks.push(("index_manifest".to_string(), "exists (invalid)".to_string()));
+                }
             }
         } else {
             checks.push((

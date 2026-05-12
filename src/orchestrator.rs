@@ -16,6 +16,8 @@ use crate::tools::qdrant::{QdrantVectorRecord, qdrant_delete_vectors, qdrant_ups
 const SYSTEM_MANIFEST_PATH: &str = "/etc/agentos/configs/rag_index_manifest.json";
 const DEFAULT_COLLECTION: &str = "repos";
 const DEFAULT_EMBEDDING_MODEL: &str = "nomic-embed-text:latest";
+const DEFAULT_QDRANT_HOST: &str = "http://127.0.0.1:6333";
+const DEFAULT_OLLAMA_ENDPOINT: &str = "http://127.0.0.1:11434";
 const MAX_FILE_BYTES: u64 = 2_000_000;
 
 #[derive(Debug, Clone)]
@@ -145,23 +147,13 @@ struct ChunkMetadata {
 
 impl Orchestrator {
     pub fn from_env() -> Result<Self> {
-        let mut vector_db = load_vector_db_config().unwrap_or_else(|_| VectorDbConfig {
-            provider: "qdrant".to_string(),
-            host: "http://127.0.0.1:6333".to_string(),
-            collection: DEFAULT_COLLECTION.to_string(),
-            embedding_dim: 768,
-            distance: "Cosine".to_string(),
-        });
-        let collection = env_string("RAG_COLLECTION")
-            .or_else(|| env_string("COLLECTION_NAME"))
-            .unwrap_or_else(|| vector_db.collection.clone());
-        vector_db.collection = collection.clone();
+        let vector_db = resolved_vector_db_config();
+        let collection = vector_db.collection.clone();
 
         let embedding_model =
             env_string("EMBEDDING_MODEL").unwrap_or_else(|| DEFAULT_EMBEDDING_MODEL.to_string());
         let ollama = OllamaConfig {
-            endpoint: env_string("OLLAMA_ENDPOINT")
-                .unwrap_or_else(|| "http://127.0.0.1:11434".to_string()),
+            endpoint: resolve_ollama_endpoint(),
             embedding_model: embedding_model.clone(),
         };
 
@@ -672,6 +664,34 @@ impl Orchestrator {
             .await
             .with_context(|| format!("failed to write {}", self.manifest_path.display()))
     }
+}
+
+pub(crate) fn resolved_vector_db_config() -> VectorDbConfig {
+    let mut vector_db = load_vector_db_config().unwrap_or_else(|_| VectorDbConfig {
+        provider: "qdrant".to_string(),
+        host: DEFAULT_QDRANT_HOST.to_string(),
+        collection: DEFAULT_COLLECTION.to_string(),
+        embedding_dim: 768,
+        distance: "Cosine".to_string(),
+    });
+
+    vector_db.collection = env_string("RAG_COLLECTION")
+        .or_else(|| env_string("COLLECTION_NAME"))
+        .unwrap_or_else(|| vector_db.collection.clone());
+
+    vector_db
+}
+
+pub(crate) fn resolve_ollama_endpoint() -> String {
+    env_string("OLLAMA_ENDPOINT")
+        .or_else(|| env_string("OLLAMA_HOST"))
+        .unwrap_or_else(|| DEFAULT_OLLAMA_ENDPOINT.to_string())
+}
+
+pub(crate) fn manifest_chunk_count(raw: &str) -> Result<usize> {
+    let manifest: IndexManifest =
+        serde_json::from_str(raw).with_context(|| "failed to parse index manifest JSON")?;
+    Ok(manifest.chunks.len())
 }
 
 fn merge_summary(target: &mut OperationSummary, other: OperationSummary) {
