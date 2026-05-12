@@ -1,7 +1,9 @@
 use std::env;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+
+const SYSTEM_ROUTER_CONFIG_PATH: &str = "/etc/agentos/configs/model_router.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -139,11 +141,13 @@ pub struct ModelRouterConfig {
 
 impl Default for ModelRouter {
     fn default() -> Self {
-        // Try to load from /etc/agentos/configs/model_router.json first
-        if let Ok(config) = Self::load_config() {
-            return config;
-        }
+        // Built-in defaults only. Config/env overlays are applied explicitly by callers.
+        Self::built_in_defaults()
+    }
+}
 
+impl ModelRouter {
+    pub fn built_in_defaults() -> Self {
         Self {
             roles: vec![RoleProvider {
                 role: ProviderRole::RagEmbedding,
@@ -152,19 +156,17 @@ impl Default for ModelRouter {
             }],
         }
     }
-}
 
-impl ModelRouter {
-    pub fn load_config() -> Result<Self> {
-        let path = "/etc/agentos/configs/model_router.json";
-        if !std::path::Path::new(path).exists() {
-            return Err(anyhow::anyhow!("config file not found at {}", path));
+    pub fn load_system_config_if_present() -> Result<Option<Self>> {
+        let path = std::path::Path::new(SYSTEM_ROUTER_CONFIG_PATH);
+        if !path.exists() {
+            return Ok(None);
         }
-        let raw = std::fs::read_to_string(path)?;
-        let config: ModelRouterConfig = serde_json::from_str(&raw)?;
-        Ok(Self {
-            roles: config.roles,
-        })
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        let config: ModelRouterConfig = serde_json::from_str(&raw)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
+        Ok(Some(Self { roles: config.roles }))
     }
 
     pub fn from_env() -> Result<Self> {
@@ -173,7 +175,11 @@ impl ModelRouter {
 
         for role in all_roles {
             let key = role.to_env_key();
-            let Some(provider_str) = env::var(&key).ok() else {
+            let Some(provider_str) = env::var(&key)
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+            else {
                 continue;
             };
 
@@ -182,7 +188,12 @@ impl ModelRouter {
             };
 
             if let Some(key_var) = provider.api_key_env_var() {
-                if env::var(key_var).is_err() {
+                let has_key = env::var(key_var)
+                    .ok()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                    .is_some();
+                if !has_key {
                     bail!(
                         "{} is required for {} provider in role {} but not set",
                         key_var,
@@ -192,7 +203,10 @@ impl ModelRouter {
                 }
             }
 
-            let model = env::var(format!("{key}_MODEL")).ok();
+            let model = env::var(format!("{key}_MODEL"))
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
             roles.push(RoleProvider {
                 role,
                 provider,
@@ -322,6 +336,19 @@ mod tests {
             clear_role_env();
             unsafe {
                 std::env::set_var("AGENTOS_ROLE_DEFAULT_CODING", "openai");
+            }
+            let err = ModelRouter::from_env().unwrap_err().to_string();
+            assert!(err.contains("OPENAI_API_KEY"), "{err}");
+        });
+    }
+
+    #[test]
+    fn env_parsing_empty_key_is_treated_as_missing() {
+        with_env_lock(|| {
+            clear_role_env();
+            unsafe {
+                std::env::set_var("AGENTOS_ROLE_DEFAULT_CODING", "openai");
+                std::env::set_var("OPENAI_API_KEY", "   ");
             }
             let err = ModelRouter::from_env().unwrap_err().to_string();
             assert!(err.contains("OPENAI_API_KEY"), "{err}");

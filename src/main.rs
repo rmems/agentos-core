@@ -71,8 +71,12 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command.unwrap_or(Commands::Serve) {
+        Commands::ServeHttp { bind } => {
+            http::serve(&bind).await?;
+        }
         Commands::Route { env } => {
-            let base = ModelRouter::default();
+            let built_in = ModelRouter::built_in_defaults();
+            let config_router = ModelRouter::load_system_config_if_present()?;
             let overrides = if env {
                 ModelRouter::from_env()?
             } else {
@@ -82,12 +86,15 @@ async fn main() -> Result<()> {
             println!("# Role-based providers:");
             for role in ProviderRole::all() {
                 let override_p = overrides.get_provider(role);
-                let base_p = base.get_provider(role);
-                let chosen = override_p.or(base_p);
+                let config_p = config_router.as_ref().and_then(|r| r.get_provider(role));
+                let built_in_p = built_in.get_provider(role);
+                let chosen = override_p.or(config_p).or(built_in_p);
                 let status = if override_p.is_some() {
-                    "(from env)"
-                } else if base_p.is_some() {
-                    "(default)"
+                    "(env)"
+                } else if config_p.is_some() {
+                    "(config)"
+                } else if built_in_p.is_some() {
+                    "(built-in)"
                 } else {
                     "(not set)"
                 };
@@ -134,9 +141,6 @@ async fn main() -> Result<()> {
                         .waiting()
                         .await?;
                 }
-                Commands::ServeHttp { bind } => {
-                    http::serve(&bind).await?;
-                }
                 Commands::Doctor => {
                     println!("{}", install::doctor(&install_ctx)?);
                 }
@@ -153,7 +157,9 @@ async fn main() -> Result<()> {
                         println!("{line}");
                     }
                 }
-                Commands::Route { .. } | Commands::Index => unreachable!(),
+                Commands::ServeHttp { .. } | Commands::Route { .. } | Commands::Index => {
+                    unreachable!()
+                }
             }
         }
     }

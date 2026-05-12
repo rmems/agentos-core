@@ -381,16 +381,7 @@ pub fn doctor_checks() -> Vec<(String, String)> {
         ])
         .output()
     {
-        let status = if output.status.success() {
-            let body = String::from_utf8_lossy(&output.stdout);
-            if body.contains("ready") {
-                "ok"
-            } else {
-                "degraded"
-            }
-        } else {
-            "unreachable"
-        };
+        let status = if output.status.success() { "ok" } else { "unreachable" };
         checks.push(("qdrant".to_string(), status.to_string()));
     } else {
         checks.push(("qdrant".to_string(), "unreachable".to_string()));
@@ -432,7 +423,12 @@ pub fn doctor_checks() -> Vec<(String, String)> {
         "OLLAMA_API_KEY",
     ];
     for var in provider_vars {
-        let status = if std::env::var(var).is_ok() {
+        let status = if std::env::var(var)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .is_some()
+        {
             "configured"
         } else {
             "not set"
@@ -477,7 +473,7 @@ pub fn doctor_checks() -> Vec<(String, String)> {
         .unwrap_or_else(|_| "repos".to_string());
     checks.push(("RAG_COLLECTION".to_string(), rag_collection));
 
-    // Check index manifest (same resolution as orchestrator)
+    // Check index manifest (same resolution as runtime orchestrator)
     let manifest_path = crate::orchestrator::rag_index_manifest_path();
 
     let manifest_exists = manifest_path.exists();
@@ -505,7 +501,7 @@ pub fn doctor_checks() -> Vec<(String, String)> {
     } else {
         checks.push((
             "index_manifest".to_string(),
-            format!("not found ({})", manifest_path),
+            format!("not found ({})", manifest_path.display()),
         ));
     }
 
