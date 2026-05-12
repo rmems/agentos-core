@@ -1,8 +1,9 @@
 use std::env;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+#[cfg(unix)]
 const SYSTEM_ROUTER_CONFIG_PATH: &str = "/etc/agentos/configs/model_router.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -158,15 +159,24 @@ impl ModelRouter {
     }
 
     pub fn load_system_config_if_present() -> Result<Option<Self>> {
-        let path = std::path::Path::new(SYSTEM_ROUTER_CONFIG_PATH);
-        if !path.exists() {
-            return Ok(None);
+        #[cfg(unix)]
+        {
+            let path = std::path::Path::new(SYSTEM_ROUTER_CONFIG_PATH);
+            if !path.exists() {
+                return Ok(None);
+            }
+            let raw = std::fs::read_to_string(path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            let config: ModelRouterConfig = serde_json::from_str(&raw)
+                .with_context(|| format!("failed to parse {}", path.display()))?;
+            Ok(Some(Self {
+                roles: config.roles,
+            }))
         }
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        let config: ModelRouterConfig = serde_json::from_str(&raw)
-            .with_context(|| format!("failed to parse {}", path.display()))?;
-        Ok(Some(Self { roles: config.roles }))
+        #[cfg(not(unix))]
+        {
+            Ok(None)
+        }
     }
 
     pub fn from_env() -> Result<Self> {
