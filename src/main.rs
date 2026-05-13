@@ -22,8 +22,7 @@ use crate::server::DiscoveryServer;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "wilo-agent",
-    bin_name = "wilo-agent",
+    name = env!("CARGO_PKG_NAME"),
     version,
     about = "Local MCP server for Wilo Agent context and bounded repo analysis"
 )]
