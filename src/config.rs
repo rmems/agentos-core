@@ -2,7 +2,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,14 +36,30 @@ impl ServerConfig {
 }
 
 pub fn discover_repo_home() -> Result<PathBuf> {
-    if let Ok(home) = env::var("AGENTOS_CORE_HOME") {
-        let path = PathBuf::from(home);
-        if path.exists() {
-            return Ok(path);
+    match env::var("AGENTOS_CORE_HOME") {
+        Ok(home) => {
+            let path = PathBuf::from(&home);
+            if !path.exists() {
+                bail!(
+                    "AGENTOS_CORE_HOME is set but does not exist: {}",
+                    path.display()
+                );
+            }
+            if !path.is_dir() {
+                bail!(
+                    "AGENTOS_CORE_HOME is set but is not a directory: {}",
+                    path.display()
+                );
+            }
+            Ok(path)
+        }
+        Err(env::VarError::NotPresent) => {
+            env::current_dir().context("failed to resolve current directory")
+        }
+        Err(env::VarError::NotUnicode(_)) => {
+            bail!("AGENTOS_CORE_HOME is set but is not valid unicode");
         }
     }
-
-    env::current_dir().context("failed to resolve current directory")
 }
 
 /// Split `RAG_REPO_ROOTS` using the platform path separator rules (`:` vs `;`).
