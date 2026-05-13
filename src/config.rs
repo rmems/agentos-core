@@ -1,7 +1,7 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,20 +42,7 @@ pub fn discover_repo_home() -> Result<PathBuf> {
         }
     }
 
-    // Walk up ancestors (starting at current dir)
-    let mut current = env::current_dir().context("failed to resolve current directory")?;
-    loop {
-        if current.join("config/server.toml").exists() {
-            return Ok(current);
-        }
-        if !current.pop() {
-            break;
-        }
-    }
-
-    bail!(
-        "unable to locate repo home: expected config/server.toml in current directory or ancestors"
-    )
+    env::current_dir().context("failed to resolve current directory")
 }
 
 pub fn load_server_config(repo_home: &Path) -> Result<ServerConfig> {

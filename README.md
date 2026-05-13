@@ -154,6 +154,7 @@ cargo run -- route
 # Overlay routing from environment variables (AGENTOS_ROLE_*)
 # (`--env` is a backward-compatible alias for `--from-env`.)
 cargo run -- route --from-env
+cargo run -- route --env
 
 # Index repos for RAG
 cargo run -- index
