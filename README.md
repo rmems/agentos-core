@@ -150,6 +150,9 @@ cargo run -- uninstall --clients codex,cursor
 
 # Show model routing table
 cargo run -- route
+#
+# Overlay routing from environment variables (AGENTOS_ROLE_*)
+cargo run -- route --from-env
 
 # Index repos for RAG
 cargo run -- index
