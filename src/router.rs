@@ -26,6 +26,22 @@ pub enum ModelProvider {
 }
 
 impl ModelProvider {
+    pub fn valid_names() -> &'static [&'static str] {
+        &[
+            "ollama",
+            "ollama-cloud",
+            "openai",
+            "anthropic",
+            "google-ai-studio",
+            "google",
+            "azure",
+            "openrouter",
+            "nvidia-nim",
+            "codex",
+            "opencode",
+        ]
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::Ollama => "ollama",
@@ -63,7 +79,8 @@ impl ModelProvider {
         match self {
             Self::Openai => Some("OPENAI_API_KEY"),
             Self::Anthropic => Some("ANTHROPIC_API_KEY"),
-            Self::GoogleAiStudio | Self::Google => Some("GEMINI_API_KEY"),
+            Self::GoogleAiStudio => Some("GOOGLE_AI_STUDIO_API_KEY"),
+            Self::Google => Some("GEMINI_API_KEY"),
             Self::Azure => Some("AZURE_OPENAI_API_KEY"),
             Self::Openrouter => Some("OPENROUTER_API_KEY"),
             Self::NvidiaNim => Some("NVIDIA_NIM_API_KEY"),
@@ -194,7 +211,12 @@ impl ModelRouter {
             };
 
             let Some(provider) = ModelProvider::from_str(&provider_str) else {
-                bail!("unknown provider '{}' for {}", provider_str, key);
+                bail!(
+                    "unknown provider '{}' for {} (valid: {})",
+                    provider_str,
+                    key,
+                    ModelProvider::valid_names().join(", ")
+                );
             };
 
             if let Some(key_var) = provider.api_key_env_var() {
@@ -258,6 +280,7 @@ mod tests {
             "OPENAI_API_KEY",
             "ANTHROPIC_API_KEY",
             "GEMINI_API_KEY",
+            "GOOGLE_AI_STUDIO_API_KEY",
             "AZURE_OPENAI_API_KEY",
             "OPENROUTER_API_KEY",
             "NVIDIA_NIM_API_KEY",
@@ -296,7 +319,7 @@ mod tests {
         );
         assert_eq!(
             ModelProvider::GoogleAiStudio.api_key_env_var(),
-            Some("GEMINI_API_KEY")
+            Some("GOOGLE_AI_STUDIO_API_KEY")
         );
     }
 
@@ -349,6 +372,18 @@ mod tests {
             }
             let err = ModelRouter::from_env().unwrap_err().to_string();
             assert!(err.contains("OPENAI_API_KEY"), "{err}");
+        });
+    }
+
+    #[test]
+    fn env_parsing_missing_key_errors_for_google_ai_studio() {
+        with_env_lock(|| {
+            clear_role_env();
+            unsafe {
+                std::env::set_var("AGENTOS_ROLE_DEFAULT_CODING", "google-ai-studio");
+            }
+            let err = ModelRouter::from_env().unwrap_err().to_string();
+            assert!(err.contains("GOOGLE_AI_STUDIO_API_KEY"), "{err}");
         });
     }
 

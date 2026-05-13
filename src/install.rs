@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
@@ -221,13 +222,13 @@ pub fn print_config(ctx: &InstallContext, target: ClientTarget) -> Result<String
     })
 }
 
-pub fn doctor(ctx: &InstallContext) -> Result<String> {
+pub async fn doctor(ctx: &InstallContext) -> Result<String> {
     let mut lines = Vec::new();
     lines.push(format!("repo_home={}", ctx.repo_home.display()));
     lines.push(format!("launcher={}", ctx.launcher_path().display()));
 
     // Add infrastructure checks
-    for (name, status) in doctor_checks() {
+    for (name, status) in doctor_checks().await {
         lines.push(format!("{name}: {status}"));
     }
 
@@ -254,7 +255,7 @@ pub fn doctor(ctx: &InstallContext) -> Result<String> {
 
     lines.push(format!(
         "codex-installed={}",
-        codex_has_server().unwrap_or(false)
+        codex_has_server_status().await
     ));
     Ok(lines.join("\n"))
 }
@@ -349,56 +350,68 @@ fn write_json_value(path: &Path, value: Value, dry_run: bool) -> Result<()> {
         .with_context(|| format!("failed to write {}", path.display()))
 }
 
-fn codex_has_server() -> Result<bool> {
-    let output = Command::new("codex")
-        .args(["mcp", "list"])
-        .output()
-        .context("failed to run codex mcp list")?;
-    Ok(String::from_utf8_lossy(&output.stdout).contains(SERVER_KEY))
-}
+async fn codex_has_server_status() -> String {
+    let result = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::process::Command::new("codex")
+            .args(["mcp", "list"])
+            .output()
+            .await
+    })
+    .await;
 
-fn curl_health(name: &str, url: &str, curl_missing: bool) -> (String, String) {
-    if curl_missing {
-        return (name.to_string(), "curl missing".to_string());
+    let output = match result {
+        Ok(Ok(output)) => output,
+        Ok(Err(err)) if err.kind() == std::io::ErrorKind::NotFound => return "missing".to_string(),
+        Ok(Err(err)) => return format!("error: {err}"),
+        Err(_) => return "timeout".to_string(),
+    };
+
+    if !output.status.success() {
+        return format!("error: exit {}", output.status);
     }
 
-    if let Ok(output) = Command::new("curl")
-        .args([
-            "-sS",
-            "--fail",
-            "--connect-timeout",
-            "2",
-            "--max-time",
-            "4",
-            url,
-        ])
-        .output()
-    {
-        if output.status.success() {
-            return (name.to_string(), "ok".to_string());
-        }
-        return (name.to_string(), "unreachable".to_string());
+    let configured = String::from_utf8_lossy(&output.stdout).contains(SERVER_KEY);
+    if configured {
+        "configured".to_string()
+    } else {
+        "not configured".to_string()
     }
-
-    (name.to_string(), "unreachable".to_string())
 }
 
-pub fn doctor_checks() -> Vec<(String, String)> {
+async fn http_health(client: &reqwest::Client, name: &str, url: &str) -> (String, String) {
+    let response = match client.get(url).send().await {
+        Ok(response) => response,
+        Err(err) if err.is_timeout() => return (name.to_string(), "timeout".to_string()),
+        Err(_) => return (name.to_string(), "unreachable".to_string()),
+    };
+
+    let status = response.status();
+    if status.is_success() {
+        return (name.to_string(), "ok".to_string());
+    }
+
+    (name.to_string(), format!("http {}", status.as_u16()))
+}
+
+pub async fn doctor_checks() -> Vec<(String, String)> {
     let mut checks = Vec::new();
 
-    let curl_missing = match Command::new("curl").arg("--version").output() {
-        Ok(_) => false,
-        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+    let client = match reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(4))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            checks.push(("http_client".to_string(), format!("error: {err}")));
+            return checks;
+        }
     };
 
     // Check Qdrant
     let vector_db = crate::orchestrator::resolved_vector_db_config();
     let qdrant_host = vector_db.host.trim_end_matches('/').to_string();
-    checks.push(curl_health(
-        "qdrant",
-        &format!("{}/readyz", qdrant_host),
-        curl_missing,
-    ));
+    checks.push(http_health(&client, "qdrant", &format!("{}/readyz", qdrant_host)).await);
 
     let ollama_endpoint = crate::orchestrator::resolve_ollama_endpoint();
     let ollama_health = if std::env::var("OLLAMA_ENDPOINT")
@@ -419,16 +432,20 @@ pub fn doctor_checks() -> Vec<(String, String)> {
     };
 
     // Check Ollama
-    checks.push(curl_health(
-        "ollama",
-        &format!("{}/api/tags", ollama_endpoint.trim_end_matches('/')),
-        curl_missing,
-    ));
+    checks.push(
+        http_health(
+            &client,
+            "ollama",
+            &format!("{}/api/tags", ollama_endpoint.trim_end_matches('/')),
+        )
+        .await,
+    );
 
     // Check all cloud provider API keys
     let provider_vars = [
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
+        "GOOGLE_AI_STUDIO_API_KEY",
         "GEMINI_API_KEY",
         "AZURE_OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
