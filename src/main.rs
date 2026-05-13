@@ -23,6 +23,7 @@ use crate::server::DiscoveryServer;
 #[derive(Debug, Parser)]
 #[command(
     name = "wilo-agent",
+    bin_name = "wilo-agent",
     version,
     about = "Local MCP server for Wilo Agent context and bounded repo analysis"
 )]

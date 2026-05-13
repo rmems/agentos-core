@@ -350,6 +350,12 @@ fn write_json_value(path: &Path, value: Value, dry_run: bool) -> Result<()> {
         .with_context(|| format!("failed to write {}", path.display()))
 }
 
+fn parse_rag_repo_roots(value: &std::ffi::OsStr) -> Vec<std::path::PathBuf> {
+    std::env::split_paths(value)
+        .filter(|p| !p.as_os_str().is_empty())
+        .collect()
+}
+
 async fn codex_has_server_status() -> String {
     let result = tokio::time::timeout(Duration::from_secs(3), async {
         tokio::process::Command::new("codex")
@@ -478,9 +484,7 @@ pub async fn doctor_checks() -> Vec<(String, String)> {
             checks.push(("RAG_REPO_ROOTS".to_string(), "not set".to_string()));
         }
         Some(value) => {
-            let roots: Vec<std::path::PathBuf> = std::env::split_paths(&value)
-                .filter(|p| !p.as_os_str().is_empty())
-                .collect();
+            let roots = parse_rag_repo_roots(&value);
             let valid_count = roots.iter().filter(|root| root.is_dir()).count();
             checks.push((
                 "RAG_REPO_ROOTS".to_string(),
@@ -523,4 +527,21 @@ pub async fn doctor_checks() -> Vec<(String, String)> {
     }
 
     checks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_rag_repo_roots_uses_split_paths() {
+        let dir1 = tempfile::tempdir().expect("tempdir 1");
+        let dir2 = tempfile::tempdir().expect("tempdir 2");
+        let joined = std::env::join_paths([dir1.path(), dir2.path()]).expect("join_paths");
+        let parsed = parse_rag_repo_roots(&joined);
+        assert_eq!(
+            parsed,
+            vec![dir1.path().to_path_buf(), dir2.path().to_path_buf()]
+        );
+    }
 }

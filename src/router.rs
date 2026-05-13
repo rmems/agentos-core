@@ -388,6 +388,32 @@ mod tests {
     }
 
     #[test]
+    fn env_parsing_codex_does_not_require_key() {
+        with_env_lock(|| {
+            clear_role_env();
+            unsafe {
+                std::env::set_var("AGENTOS_ROLE_DEFAULT_CODING", "codex");
+            }
+            let router = ModelRouter::from_env().unwrap();
+            let rp = router.get_provider(ProviderRole::DefaultCoding).unwrap();
+            assert_eq!(rp.provider, ModelProvider::Codex);
+        });
+    }
+
+    #[test]
+    fn env_parsing_opencode_does_not_require_key() {
+        with_env_lock(|| {
+            clear_role_env();
+            unsafe {
+                std::env::set_var("AGENTOS_ROLE_DEFAULT_CODING", "opencode");
+            }
+            let router = ModelRouter::from_env().unwrap();
+            let rp = router.get_provider(ProviderRole::DefaultCoding).unwrap();
+            assert_eq!(rp.provider, ModelProvider::OpenCode);
+        });
+    }
+
+    #[test]
     fn env_parsing_empty_key_is_treated_as_missing() {
         with_env_lock(|| {
             clear_role_env();
