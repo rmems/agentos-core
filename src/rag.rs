@@ -146,9 +146,10 @@ pub async fn index_default_repos(cfg: &RagConfig, db: &VectorDbConfig) -> Result
     let mut chunks_indexed = 0usize;
     let ollama = ollama_config_from_rag(cfg);
     let roots = match std::env::var_os("RAG_REPO_ROOTS") {
-        None | Some(ref os) if os.is_empty() => load_repo_index_config()?.roots,
-        Some(os) => std::env::split_paths(&os)
-            .filter(|p| !p.as_os_str().is_empty())
+        None => load_repo_index_config()?.roots,
+        Some(os) if os.is_empty() => load_repo_index_config()?.roots,
+        Some(os) => crate::config::parse_rag_repo_roots(&os)
+            .into_iter()
             .map(|p| p.to_string_lossy().to_string())
             .collect(),
     };

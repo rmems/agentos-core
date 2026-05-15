@@ -996,11 +996,7 @@ fn resolve_repo_root(repo: &str) -> Result<PathBuf> {
 
 fn repo_roots_from_env() -> Vec<PathBuf> {
     std::env::var_os("RAG_REPO_ROOTS")
-        .map(|value| {
-            std::env::split_paths(&value)
-                .filter(|p| !p.as_os_str().is_empty())
-                .collect::<Vec<_>>()
-        })
+        .map(|value| crate::config::parse_rag_repo_roots(&value))
         .filter(|roots| !roots.is_empty())
         .unwrap_or_else(|| vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))])
 }
